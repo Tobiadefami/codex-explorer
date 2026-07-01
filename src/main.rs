@@ -1,5 +1,6 @@
 mod cli;
 mod codex;
+mod db;
 
 use anyhow::Result;
 use clap::Parser;
