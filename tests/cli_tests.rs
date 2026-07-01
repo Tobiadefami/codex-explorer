@@ -5,8 +5,20 @@ use predicates::prelude::*;
 #[path = "../src/codex_cmd.rs"]
 mod codex_cmd;
 
-fn fixture_sessions_dir() -> &'static str {
-    "tests/fixtures"
+fn fixture_sessions_dir(temp: &tempfile::TempDir) -> std::path::PathBuf {
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-malformed.jsonl",
+        sessions_dir.join("session-malformed.jsonl"),
+    )
+    .unwrap();
+    sessions_dir
 }
 
 #[test]
@@ -24,6 +36,7 @@ fn builds_codex_resume_command() {
 fn reindex_and_search_from_cli() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("index.sqlite");
+    let sessions_dir = fixture_sessions_dir(&temp);
 
     Command::cargo_bin("cx")
         .unwrap()
@@ -31,7 +44,7 @@ fn reindex_and_search_from_cli() {
             "--db",
             db_path.to_str().unwrap(),
             "--sessions-dir",
-            fixture_sessions_dir(),
+            sessions_dir.to_str().unwrap(),
             "reindex",
         ])
         .assert()
@@ -68,6 +81,7 @@ fn search_prints_message_when_no_sessions_match() {
 fn show_displays_session_preview() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("index.sqlite");
+    let sessions_dir = fixture_sessions_dir(&temp);
 
     Command::cargo_bin("cx")
         .unwrap()
@@ -75,7 +89,7 @@ fn show_displays_session_preview() {
             "--db",
             db_path.to_str().unwrap(),
             "--sessions-dir",
-            fixture_sessions_dir(),
+            sessions_dir.to_str().unwrap(),
             "reindex",
         ])
         .assert()

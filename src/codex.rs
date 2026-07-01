@@ -99,7 +99,7 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
     let cwd = cwd.unwrap_or_default();
     let title = messages
         .iter()
-        .find(|message| message.role == "user" && !message.text.trim().is_empty())
+        .find(|message| is_title_candidate(message))
         .map(|message| first_line(&message.text))
         .unwrap_or_else(|| session_id.clone());
     let searchable_text = messages
@@ -165,4 +165,33 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
 
 fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or(text).trim().to_string()
+}
+
+fn is_title_candidate(message: &ParsedMessage) -> bool {
+    if message.role != "user" {
+        return false;
+    }
+
+    let text = message.text.trim_start();
+    if text.is_empty() {
+        return false;
+    }
+
+    !is_bootstrap_message(text)
+}
+
+fn is_bootstrap_message(text: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "<environment_context",
+        "<permissions instructions>",
+        "<apps_instructions>",
+        "<skills_instructions>",
+        "<plugins_instructions>",
+        "<collaboration_mode>",
+        "# AGENTS.md instructions",
+        "# CLAUDE.md instructions",
+        "# GEMINI.md instructions",
+    ];
+
+    PREFIXES.iter().any(|prefix| text.starts_with(prefix))
 }

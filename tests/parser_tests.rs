@@ -43,3 +43,13 @@ fn skips_malformed_records_and_keeps_valid_messages() {
     assert_eq!(parsed.messages.len(), 1);
     assert_eq!(parsed.malformed_records, 1);
 }
+
+#[test]
+fn title_skips_environment_context_messages() {
+    let parsed =
+        codex::parse_session_file(Path::new("tests/fixtures/session-environment-title.jsonl"))
+            .unwrap();
+
+    assert_eq!(parsed.title, "build a codex session manager");
+    assert_eq!(parsed.messages.len(), 3);
+}

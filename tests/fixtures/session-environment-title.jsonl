@@ -1,0 +1,4 @@
+{"timestamp":"2026-07-01T12:00:00Z","type":"session_meta","payload":{"id":"33333333-3333-4333-8333-333333333333","timestamp":"2026-07-01T12:00:00Z","cwd":"/work/project-c","cli_version":"0.142.5","model_provider":"openai","source":"cli","originator":"codex-tui"}}
+{"timestamp":"2026-07-01T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/work/project-c</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-07-01T12:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"build a codex session manager"}]}}
+{"timestamp":"2026-07-01T12:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the session files."}]}}
