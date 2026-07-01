@@ -52,6 +52,19 @@ fn reindex_and_search_from_cli() {
 }
 
 #[test]
+fn search_prints_message_when_no_sessions_match() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("index.sqlite");
+
+    Command::cargo_bin("cx")
+        .unwrap()
+        .args(["--db", db_path.to_str().unwrap(), "search", "not-present"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("no sessions found\n"));
+}
+
+#[test]
 fn show_displays_session_preview() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("index.sqlite");

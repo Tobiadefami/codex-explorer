@@ -103,6 +103,11 @@ fn resolve_sessions_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 fn print_summaries(summaries: Vec<SessionSummary>) {
+    if summaries.is_empty() {
+        println!("no sessions found");
+        return;
+    }
+
     for summary in summaries {
         println!(
             "{}  {}  {}  {}",
