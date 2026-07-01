@@ -2,6 +2,8 @@
 mod codex;
 #[path = "../src/db.rs"]
 mod db;
+#[path = "../src/indexer.rs"]
+mod indexer;
 
 use std::path::Path;
 
@@ -84,4 +86,30 @@ fn search_treats_user_input_as_plain_text() {
     assert!(database.search_sessions("\"turnstile", 10).is_ok());
     assert!(database.search_sessions("title:turnstile", 10).is_ok());
     assert!(database.search_sessions("", 10).unwrap().is_empty());
+}
+
+#[test]
+fn reindexes_all_jsonl_files_in_a_sessions_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-malformed.jsonl",
+        sessions_dir.join("session-malformed.jsonl"),
+    )
+    .unwrap();
+
+    let db_path = temp.path().join("index.sqlite");
+    let database = db::Database::open(&db_path).unwrap();
+    let report = indexer::reindex(&database, &sessions_dir).unwrap();
+
+    assert_eq!(report.scanned_files, 2);
+    assert_eq!(report.indexed_sessions, 2);
+    assert_eq!(report.malformed_records, 1);
+    assert_eq!(database.list_sessions(10).unwrap().len(), 2);
 }
