@@ -99,12 +99,12 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
     let cwd = cwd.unwrap_or_default();
     let title = messages
         .iter()
-        .find(|message| is_title_candidate(message))
-        .map(|message| first_line(&message.text))
+        .filter_map(title_from_message)
+        .next()
         .unwrap_or_else(|| session_id.clone());
     let searchable_text = messages
         .iter()
-        .map(|message| message.text.as_str())
+        .filter_map(searchable_text_from_message)
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -163,21 +163,40 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or(text).trim().to_string()
-}
-
-fn is_title_candidate(message: &ParsedMessage) -> bool {
+fn title_from_message(message: &ParsedMessage) -> Option<String> {
     if message.role != "user" {
-        return false;
+        return None;
     }
 
     let text = message.text.trim_start();
-    if text.is_empty() {
-        return false;
+    if text.is_empty() || is_bootstrap_message(text) {
+        return None;
     }
 
-    !is_bootstrap_message(text)
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !is_noise_line(line))
+        .map(ToOwned::to_owned)
+}
+
+fn searchable_text_from_message(message: &ParsedMessage) -> Option<String> {
+    let text = message.text.trim_start();
+    if text.is_empty() || is_bootstrap_message(text) {
+        return None;
+    }
+
+    let searchable_text = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !is_noise_line(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if searchable_text.is_empty() {
+        None
+    } else {
+        Some(searchable_text)
+    }
 }
 
 fn is_bootstrap_message(text: &str) -> bool {
@@ -194,4 +213,8 @@ fn is_bootstrap_message(text: &str) -> bool {
     ];
 
     PREFIXES.iter().any(|prefix| text.starts_with(prefix))
+}
+
+fn is_noise_line(line: &str) -> bool {
+    line.starts_with("<image ")
 }

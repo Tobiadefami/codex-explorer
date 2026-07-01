@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -241,6 +241,49 @@ impl Database {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(Some(SessionDetail { summary, messages }))
+    }
+
+    pub fn prune_missing_source_paths(
+        &self,
+        source_root: &Path,
+        seen_source_paths: &HashSet<String>,
+    ) -> Result<usize> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT session_id, source_path FROM sessions")?;
+        let stored_sessions = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let session_ids_to_prune = stored_sessions
+            .into_iter()
+            .filter(|(_, source_path)| {
+                Path::new(source_path).starts_with(source_root)
+                    && !seen_source_paths.contains(source_path)
+            })
+            .map(|(session_id, _)| session_id)
+            .collect::<Vec<_>>();
+
+        if session_ids_to_prune.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        for session_id in &session_ids_to_prune {
+            tx.execute(
+                "DELETE FROM session_fts WHERE session_id = ?1",
+                params![session_id],
+            )?;
+            tx.execute(
+                "DELETE FROM sessions WHERE session_id = ?1",
+                params![session_id],
+            )?;
+        }
+        tx.commit()?;
+
+        Ok(session_ids_to_prune.len())
     }
 }
 

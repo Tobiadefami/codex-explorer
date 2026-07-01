@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use anyhow::{Context, Result};
 use walkdir::WalkDir;
@@ -22,6 +22,7 @@ pub struct ReindexReport {
 
 pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport> {
     let mut report = ReindexReport::default();
+    let mut seen_source_paths = HashSet::new();
 
     if !sessions_dir.exists() {
         return Ok(report);
@@ -46,6 +47,7 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
         }
 
         report.scanned_files += 1;
+        seen_source_paths.insert(path.display().to_string());
 
         match codex::parse_session_file(path) {
             Ok(session) => {
@@ -68,6 +70,10 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
             }
         }
     }
+
+    database
+        .prune_missing_source_paths(sessions_dir, &seen_source_paths)
+        .with_context(|| format!("prune stale sessions under {}", sessions_dir.display()))?;
 
     Ok(report)
 }

@@ -161,3 +161,26 @@ fn reindex_reports_parse_failures_and_continues() {
     assert!(report.failed_files[0].contains("missing-meta.jsonl"));
     assert!(report.failed_files[0].contains("missing session id"));
 }
+
+#[test]
+fn reindex_prunes_sessions_when_source_files_are_removed() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    let session_path = sessions_dir.join("session-a.jsonl");
+    std::fs::copy("tests/fixtures/session-a.jsonl", &session_path).unwrap();
+
+    let db_path = temp.path().join("index.sqlite");
+    let database = db::Database::open(&db_path).unwrap();
+
+    let first_report = indexer::reindex(&database, &sessions_dir).unwrap();
+    assert_eq!(first_report.indexed_sessions, 1);
+    assert_eq!(database.list_sessions(10).unwrap().len(), 1);
+
+    std::fs::remove_file(session_path).unwrap();
+
+    let second_report = indexer::reindex(&database, &sessions_dir).unwrap();
+    assert_eq!(second_report.scanned_files, 0);
+    assert_eq!(second_report.indexed_sessions, 0);
+    assert!(database.list_sessions(10).unwrap().is_empty());
+}

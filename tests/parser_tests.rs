@@ -52,4 +52,14 @@ fn title_skips_environment_context_messages() {
 
     assert_eq!(parsed.title, "build a codex session manager");
     assert_eq!(parsed.messages.len(), 3);
+    assert!(!parsed.searchable_text.contains("<environment_context>"));
+}
+
+#[test]
+fn title_skips_image_placeholder_lines() {
+    let parsed =
+        codex::parse_session_file(Path::new("tests/fixtures/session-image-title.jsonl")).unwrap();
+
+    assert_eq!(parsed.title, "explain what is broken in this screenshot");
+    assert_eq!(parsed.messages.len(), 2);
 }
