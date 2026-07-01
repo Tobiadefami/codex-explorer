@@ -114,8 +114,24 @@ fn reindexes_all_jsonl_files_in_a_sessions_directory() {
     assert_eq!(report.scanned_files, 2);
     assert_eq!(report.indexed_sessions, 2);
     assert_eq!(report.malformed_records, 1);
+    assert_eq!(report.warnings.len(), 1);
+    assert!(report.warnings[0].path.contains("session-malformed.jsonl"));
+    assert_eq!(report.warnings[0].malformed_records, 1);
     assert_eq!(database.list_sessions(10).unwrap().len(), 2);
     assert!(report.failed_files.is_empty());
+}
+
+#[test]
+fn reindex_missing_sessions_directory_returns_empty_report() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = db::Database::open(&temp.path().join("index.sqlite")).unwrap();
+    let report = indexer::reindex(&database, &temp.path().join("missing")).unwrap();
+
+    assert_eq!(report.scanned_files, 0);
+    assert_eq!(report.indexed_sessions, 0);
+    assert_eq!(report.malformed_records, 0);
+    assert!(report.failed_files.is_empty());
+    assert!(report.warnings.is_empty());
 }
 
 #[test]

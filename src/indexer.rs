@@ -5,12 +5,19 @@ use walkdir::WalkDir;
 
 use crate::{codex, db::Database};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReindexWarning {
+    pub path: String,
+    pub malformed_records: usize,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ReindexReport {
     pub scanned_files: usize,
     pub indexed_sessions: usize,
     pub malformed_records: usize,
     pub failed_files: Vec<String>,
+    pub warnings: Vec<ReindexWarning>,
 }
 
 pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport> {
@@ -42,6 +49,12 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
 
         match codex::parse_session_file(path) {
             Ok(session) => {
+                if session.malformed_records > 0 {
+                    report.warnings.push(ReindexWarning {
+                        path: path.display().to_string(),
+                        malformed_records: session.malformed_records,
+                    });
+                }
                 report.malformed_records += session.malformed_records;
                 database
                     .upsert_session(&session)
