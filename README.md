@@ -1,6 +1,6 @@
-# cx
+# Codex Explorer
 
-`cx` is a local Codex session manager. It indexes `~/.codex/sessions/**/*.jsonl` so you can search, preview, and resume old Codex sessions without remembering the exact date.
+Codex Explorer is a local Codex session manager. The `cx` command indexes `~/.codex/sessions/**/*.jsonl` so you can search, preview, and resume old Codex sessions without remembering the exact date.
 
 ## Commands
 

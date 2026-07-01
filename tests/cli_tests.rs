@@ -46,6 +46,16 @@ fn help_mentions_default_tui_workflow() {
 }
 
 #[test]
+fn help_mentions_codex_explorer() {
+    Command::cargo_bin("cx")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex Explorer"));
+}
+
+#[test]
 fn reindex_and_search_from_cli() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("index.sqlite");
