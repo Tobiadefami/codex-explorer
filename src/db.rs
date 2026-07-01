@@ -77,14 +77,36 @@ impl Database {
     }
 
     pub fn upsert_session(&self, session: &ParsedSession) -> Result<()> {
+        let source_path = session.source_path.display().to_string();
         let tx = self.conn.unchecked_transaction()?;
+        let existing_session_ids = {
+            let mut statement = tx.prepare(
+                r#"
+                SELECT session_id
+                FROM sessions
+                WHERE session_id = ?1 OR source_path = ?2
+                "#,
+            )?;
+            let session_ids = statement
+                .query_map(params![session.session_id, source_path], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?;
+            session_ids
+        };
+
+        for existing_session_id in &existing_session_ids {
+            tx.execute(
+                "DELETE FROM messages WHERE session_id = ?1",
+                params![existing_session_id],
+            )?;
+            tx.execute(
+                "DELETE FROM session_fts WHERE session_id = ?1",
+                params![existing_session_id],
+            )?;
+        }
+
         tx.execute(
-            "DELETE FROM messages WHERE session_id = ?1",
-            params![session.session_id],
-        )?;
-        tx.execute(
-            "DELETE FROM session_fts WHERE session_id = ?1",
-            params![session.session_id],
+            "DELETE FROM sessions WHERE source_path = ?1 AND session_id <> ?2",
+            params![source_path, session.session_id],
         )?;
         tx.execute(
             r#"
@@ -109,7 +131,7 @@ impl Database {
                 session.cwd,
                 session.cli_version,
                 session.model_provider,
-                session.source_path.display().to_string(),
+                source_path,
                 session.modified_unix_seconds,
                 session.title,
                 session.searchable_text,
@@ -162,6 +184,10 @@ impl Database {
     }
 
     pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionSummary>> {
+        let Some(fts_query) = plain_text_fts_query(query) else {
+            return Ok(Vec::new());
+        };
+
         let mut statement = self.conn.prepare(
             r#"
             SELECT s.session_id, s.started_at, s.cwd, s.title, s.source_path
@@ -172,7 +198,7 @@ impl Database {
             LIMIT ?2
             "#,
         )?;
-        let rows = statement.query_map(params![query, limit as i64], summary_from_row)?;
+        let rows = statement.query_map(params![fts_query, limit as i64], summary_from_row)?;
         rows_to_summaries(rows)
     }
 
@@ -223,6 +249,21 @@ where
     I: Iterator<Item = rusqlite::Result<SessionSummary>>,
 {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn plain_text_fts_query(query: &str) -> Option<String> {
+    let terms = query
+        .split_whitespace()
+        .map(|term| term.replace('"', "\"\""))
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{term}\""))
+        .collect::<Vec<_>>();
+
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" "))
+    }
 }
 
 fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary> {
