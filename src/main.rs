@@ -12,13 +12,16 @@ use crate::cli::{Cli, Commands};
 use crate::db::{Database, SessionSummary};
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let db_path = resolve_db_path(cli.db)?;
-    let database = Database::open(&db_path)?;
+    let Cli {
+        db,
+        sessions_dir,
+        command,
+    } = Cli::parse();
 
-    match cli.command {
+    match command {
         Commands::Reindex => {
-            let sessions_dir = resolve_sessions_dir(cli.sessions_dir)?;
+            let database = open_database(db)?;
+            let sessions_dir = resolve_sessions_dir(sessions_dir)?;
             let report = indexer::reindex(&database, &sessions_dir)?;
             println!(
                 "scanned {} files, indexed {} sessions, skipped {} malformed records",
@@ -30,40 +33,52 @@ fn main() -> Result<()> {
                     warning.malformed_records, warning.path
                 );
             }
-            if !report.failed_files.is_empty() {
+            let failed_count = report.failed_files.len();
+            if failed_count > 0 {
                 eprintln!("failed files:");
-                for failure in report.failed_files {
+                for failure in &report.failed_files {
                     eprintln!("  {failure}");
                 }
+                anyhow::bail!("failed to index {failed_count} session files");
             }
         }
         Commands::List { limit } => {
+            let database = open_database(db)?;
             print_summaries(database.list_sessions(limit)?);
         }
         Commands::Search { query, limit } => {
+            let database = open_database(db)?;
             print_summaries(database.search_sessions(&query, limit)?);
         }
-        Commands::Show { session_id } => match database.get_session(&session_id)? {
-            Some(detail) => {
-                println!("{}  {}", detail.summary.session_id, detail.summary.title);
-                println!("cwd: {}", detail.summary.cwd);
-                println!("started: {}", detail.summary.started_at);
-                println!("source: {}", detail.summary.source_path);
-                println!();
-                for message in detail.messages {
-                    println!("{}: {}", message.role, message.text.replace('\n', " "));
+        Commands::Show { session_id } => {
+            let database = open_database(db)?;
+            match database.get_session(&session_id)? {
+                Some(detail) => {
+                    println!("{}  {}", detail.summary.session_id, detail.summary.title);
+                    println!("cwd: {}", detail.summary.cwd);
+                    println!("started: {}", detail.summary.started_at);
+                    println!("source: {}", detail.summary.source_path);
+                    println!();
+                    for message in detail.messages {
+                        println!("{}: {}", message.role, message.text.replace('\n', " "));
+                    }
+                }
+                None => {
+                    anyhow::bail!("session not found: {session_id}");
                 }
             }
-            None => {
-                anyhow::bail!("session not found: {session_id}");
-            }
-        },
+        }
         Commands::Resume { session_id } => {
             println!("codex resume {session_id}");
         }
     }
 
     Ok(())
+}
+
+fn open_database(explicit_db_path: Option<PathBuf>) -> Result<Database> {
+    let db_path = resolve_db_path(explicit_db_path)?;
+    Database::open(&db_path)
 }
 
 fn resolve_db_path(explicit: Option<PathBuf>) -> Result<PathBuf> {

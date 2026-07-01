@@ -71,3 +71,58 @@ fn show_displays_session_preview() {
             "assistant: I will inspect the Worker and form code.",
         ));
 }
+
+#[test]
+fn resume_does_not_create_database() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("missing").join("index.sqlite");
+
+    Command::cargo_bin("cx")
+        .unwrap()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "resume",
+            "11111111-1111-4111-8111-111111111111",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "codex resume 11111111-1111-4111-8111-111111111111",
+        ));
+
+    assert!(!db_path.exists());
+}
+
+#[test]
+fn reindex_exits_nonzero_when_files_fail() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::write(
+        sessions_dir.join("missing-meta.jsonl"),
+        "{\"timestamp\":\"2026-07-01T12:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"no metadata here\"}]}}\n",
+    )
+    .unwrap();
+    let db_path = temp.path().join("index.sqlite");
+
+    Command::cargo_bin("cx")
+        .unwrap()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "reindex",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("indexed 1 sessions"))
+        .stderr(predicate::str::contains("failed files:"))
+        .stderr(predicate::str::contains("missing-meta.jsonl"));
+}
