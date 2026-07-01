@@ -23,6 +23,7 @@ pub struct ReindexReport {
 pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport> {
     let mut report = ReindexReport::default();
     let mut seen_source_paths = HashSet::new();
+    let mut traversal_failed = false;
 
     if !sessions_dir.exists() {
         return Ok(report);
@@ -32,6 +33,7 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
+                traversal_failed = true;
                 report.failed_files.push(error.to_string());
                 continue;
             }
@@ -71,9 +73,11 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
         }
     }
 
-    database
-        .prune_missing_source_paths(sessions_dir, &seen_source_paths)
-        .with_context(|| format!("prune stale sessions under {}", sessions_dir.display()))?;
+    if !traversal_failed {
+        database
+            .prune_missing_source_paths(sessions_dir, &seen_source_paths)
+            .with_context(|| format!("prune stale sessions under {}", sessions_dir.display()))?;
+    }
 
     Ok(report)
 }

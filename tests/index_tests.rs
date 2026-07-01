@@ -184,3 +184,33 @@ fn reindex_prunes_sessions_when_source_files_are_removed() {
     assert_eq!(second_report.indexed_sessions, 0);
     assert!(database.list_sessions(10).unwrap().is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn reindex_does_not_prune_after_traversal_errors() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    let nested_dir = sessions_dir.join("nested");
+    std::fs::create_dir_all(&nested_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        nested_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+
+    let db_path = temp.path().join("index.sqlite");
+    let database = db::Database::open(&db_path).unwrap();
+    let first_report = indexer::reindex(&database, &sessions_dir).unwrap();
+    assert_eq!(first_report.indexed_sessions, 1);
+    assert_eq!(database.list_sessions(10).unwrap().len(), 1);
+
+    std::fs::set_permissions(&nested_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let second_report = indexer::reindex(&database, &sessions_dir);
+    std::fs::set_permissions(&nested_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let second_report = second_report.unwrap();
+    assert!(!second_report.failed_files.is_empty());
+    assert_eq!(database.list_sessions(10).unwrap().len(), 1);
+}
