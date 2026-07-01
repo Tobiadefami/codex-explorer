@@ -1,5 +1,6 @@
 mod cli;
 mod codex;
+mod codex_cmd;
 mod db;
 mod indexer;
 
@@ -69,7 +70,9 @@ fn main() -> Result<()> {
             }
         }
         Commands::Resume { session_id } => {
-            println!("codex resume {session_id}");
+            let command = codex_cmd::resume_command(&session_id);
+            let code = codex_cmd::run(command)?;
+            std::process::exit(code);
         }
     }
 

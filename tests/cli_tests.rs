@@ -1,8 +1,23 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+#[allow(dead_code)]
+#[path = "../src/codex_cmd.rs"]
+mod codex_cmd;
+
 fn fixture_sessions_dir() -> &'static str {
     "tests/fixtures"
+}
+
+#[test]
+fn builds_codex_resume_command() {
+    let command = codex_cmd::resume_command("11111111-1111-4111-8111-111111111111");
+
+    assert_eq!(command.program, "codex");
+    assert_eq!(
+        command.args,
+        vec!["resume", "11111111-1111-4111-8111-111111111111"]
+    );
 }
 
 #[test]
@@ -70,28 +85,6 @@ fn show_displays_session_preview() {
         .stdout(predicate::str::contains(
             "assistant: I will inspect the Worker and form code.",
         ));
-}
-
-#[test]
-fn resume_does_not_create_database() {
-    let temp = tempfile::tempdir().unwrap();
-    let db_path = temp.path().join("missing").join("index.sqlite");
-
-    Command::cargo_bin("cx")
-        .unwrap()
-        .args([
-            "--db",
-            db_path.to_str().unwrap(),
-            "resume",
-            "11111111-1111-4111-8111-111111111111",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "codex resume 11111111-1111-4111-8111-111111111111",
-        ));
-
-    assert!(!db_path.exists());
 }
 
 #[test]
