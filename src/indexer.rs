@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use walkdir::WalkDir;
 
 use crate::{codex, db::Database};
@@ -20,10 +20,15 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
         return Ok(report);
     }
 
-    for entry in WalkDir::new(sessions_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
+    for entry in WalkDir::new(sessions_dir) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                report.failed_files.push(error.to_string());
+                continue;
+            }
+        };
+
         if !entry.file_type().is_file() {
             continue;
         }
@@ -38,7 +43,9 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
         match codex::parse_session_file(path) {
             Ok(session) => {
                 report.malformed_records += session.malformed_records;
-                database.upsert_session(&session)?;
+                database
+                    .upsert_session(&session)
+                    .with_context(|| format!("index session file {}", path.display()))?;
                 report.indexed_sessions += 1;
             }
             Err(error) => {

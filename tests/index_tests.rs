@@ -92,7 +92,9 @@ fn search_treats_user_input_as_plain_text() {
 fn reindexes_all_jsonl_files_in_a_sessions_directory() {
     let temp = tempfile::tempdir().unwrap();
     let sessions_dir = temp.path().join("sessions");
+    let nested_dir = sessions_dir.join("nested");
     std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::create_dir_all(&nested_dir).unwrap();
     std::fs::copy(
         "tests/fixtures/session-a.jsonl",
         sessions_dir.join("session-a.jsonl"),
@@ -100,9 +102,10 @@ fn reindexes_all_jsonl_files_in_a_sessions_directory() {
     .unwrap();
     std::fs::copy(
         "tests/fixtures/session-malformed.jsonl",
-        sessions_dir.join("session-malformed.jsonl"),
+        nested_dir.join("session-malformed.jsonl"),
     )
     .unwrap();
+    std::fs::write(sessions_dir.join("notes.txt"), "not a session").unwrap();
 
     let db_path = temp.path().join("index.sqlite");
     let database = db::Database::open(&db_path).unwrap();
@@ -112,4 +115,33 @@ fn reindexes_all_jsonl_files_in_a_sessions_directory() {
     assert_eq!(report.indexed_sessions, 2);
     assert_eq!(report.malformed_records, 1);
     assert_eq!(database.list_sessions(10).unwrap().len(), 2);
+    assert!(report.failed_files.is_empty());
+}
+
+#[test]
+fn reindex_reports_parse_failures_and_continues() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::write(
+        sessions_dir.join("missing-meta.jsonl"),
+        "{\"timestamp\":\"2026-07-01T12:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"no metadata here\"}]}}\n",
+    )
+    .unwrap();
+
+    let db_path = temp.path().join("index.sqlite");
+    let database = db::Database::open(&db_path).unwrap();
+    let report = indexer::reindex(&database, &sessions_dir).unwrap();
+
+    assert_eq!(report.scanned_files, 2);
+    assert_eq!(report.indexed_sessions, 1);
+    assert_eq!(database.list_sessions(10).unwrap().len(), 1);
+    assert_eq!(report.failed_files.len(), 1);
+    assert!(report.failed_files[0].contains("missing-meta.jsonl"));
+    assert!(report.failed_files[0].contains("missing session id"));
 }
