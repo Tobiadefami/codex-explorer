@@ -74,8 +74,8 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
         };
 
         if record.record_type == "session_meta" {
-            session_id = string_field(&record.payload, "session_id")
-                .or_else(|| string_field(&record.payload, "id"));
+            session_id = string_field(&record.payload, "id")
+                .or_else(|| string_field(&record.payload, "session_id"));
             started_at = string_field(&record.payload, "timestamp").or(record.timestamp.clone());
             cwd = string_field(&record.payload, "cwd");
             cli_version = string_field(&record.payload, "cli_version");
