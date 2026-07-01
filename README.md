@@ -5,12 +5,24 @@
 ## Commands
 
 ```bash
+cx
 cx reindex
 cx list
 cx search "turnstile worker"
 cx show <session-id>
 cx resume <session-id>
 ```
+
+Run `cx` without a command to open the terminal session browser.
+
+TUI keys:
+
+- type to search
+- `Backspace` edits search
+- `Up`/`Down` moves selection
+- `Enter` resumes the selected session
+- `Esc` quits
+- `q` quits when the search box is empty
 
 ## Development
 

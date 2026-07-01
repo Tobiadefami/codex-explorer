@@ -3,6 +3,7 @@ mod codex;
 mod codex_cmd;
 mod db;
 mod indexer;
+mod tui;
 
 use std::path::PathBuf;
 
@@ -20,7 +21,7 @@ fn main() -> Result<()> {
     } = Cli::parse();
 
     match command {
-        Commands::Reindex => {
+        Some(Commands::Reindex) => {
             let database = open_database(db)?;
             let sessions_dir = resolve_sessions_dir(sessions_dir)?;
             let report = indexer::reindex(&database, &sessions_dir)?;
@@ -43,15 +44,15 @@ fn main() -> Result<()> {
                 anyhow::bail!("failed to index {failed_count} session files");
             }
         }
-        Commands::List { limit } => {
+        Some(Commands::List { limit }) => {
             let database = open_database(db)?;
             print_summaries(database.list_sessions(limit)?);
         }
-        Commands::Search { query, limit } => {
+        Some(Commands::Search { query, limit }) => {
             let database = open_database(db)?;
             print_summaries(database.search_sessions(&query, limit)?);
         }
-        Commands::Show { session_id } => {
+        Some(Commands::Show { session_id }) => {
             let database = open_database(db)?;
             match database.get_session(&session_id)? {
                 Some(detail) => {
@@ -69,10 +70,18 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Resume { session_id } => {
+        Some(Commands::Resume { session_id }) => {
             let command = codex_cmd::resume_command(&session_id);
             let code = codex_cmd::run(command)?;
             std::process::exit(code);
+        }
+        None => {
+            let database = open_database(db)?;
+            if let Some(session_id) = tui::run(&database)? {
+                let command = codex_cmd::resume_command(&session_id);
+                let code = codex_cmd::run(command)?;
+                std::process::exit(code);
+            }
         }
     }
 

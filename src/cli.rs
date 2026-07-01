@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "cx")]
 #[command(about = "Find and resume Codex sessions")]
+#[command(after_help = "Run without a command to open the TUI.")]
 pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub db: Option<PathBuf>,
@@ -13,7 +14,7 @@ pub struct Cli {
     pub sessions_dir: Option<PathBuf>,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]

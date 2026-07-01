@@ -33,6 +33,19 @@ fn builds_codex_resume_command() {
 }
 
 #[test]
+fn help_mentions_default_tui_workflow() {
+    Command::cargo_bin("cx")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Run without a command to open the TUI",
+        ))
+        .stdout(predicate::str::contains("Commands:"));
+}
+
+#[test]
 fn reindex_and_search_from_cli() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("index.sqlite");
