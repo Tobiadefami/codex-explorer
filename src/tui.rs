@@ -1,4 +1,10 @@
-use std::{io, path::Path};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver},
+    thread,
+    time::Duration,
+};
 
 use anyhow::Result;
 use crossterm::{
@@ -18,9 +24,11 @@ use ratatui::{
 use crate::{
     codex::ParsedMessage,
     db::{Database, SessionDetail, SessionSummary},
+    indexer::{self, ReindexReport},
 };
 
 const TUI_RESULT_LIMIT: usize = 50;
+const REFRESH_TICK: Duration = Duration::from_millis(120);
 
 pub struct TuiState {
     query: String,
@@ -52,6 +60,10 @@ impl TuiState {
 
     pub fn set_query(&mut self, database: &Database, query: String) -> Result<()> {
         self.query = query;
+        self.reload(database)
+    }
+
+    pub fn reload(&mut self, database: &Database) -> Result<()> {
         self.summaries = if self.query.trim().is_empty() {
             database.list_sessions(self.limit)?
         } else {
@@ -116,6 +128,62 @@ impl TuiState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefreshStatus {
+    Running {
+        spinner_index: usize,
+    },
+    Complete {
+        scanned_files: usize,
+        indexed_sessions: usize,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+impl RefreshStatus {
+    pub fn running() -> Self {
+        Self::Running { spinner_index: 0 }
+    }
+
+    pub fn complete(scanned_files: usize, indexed_sessions: usize) -> Self {
+        Self::Complete {
+            scanned_files,
+            indexed_sessions,
+        }
+    }
+
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self::Failed {
+            message: message.into(),
+        }
+    }
+
+    pub fn tick(&mut self) {
+        if let Self::Running { spinner_index } = self {
+            *spinner_index = (*spinner_index + 1) % REFRESH_SPINNER.len();
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Running { spinner_index } => {
+                format!("Refreshing {}", REFRESH_SPINNER[*spinner_index])
+            }
+            Self::Complete {
+                scanned_files,
+                indexed_sessions,
+            } => format!("Refreshed {indexed_sessions} sessions from {scanned_files} files"),
+            Self::Failed { message } => format!("Refresh failed: {message}"),
+        }
+    }
+}
+
+const REFRESH_SPINNER: &[&str] = &["|", "/", "-", "\\"];
+
+type RefreshResult = std::result::Result<ReindexReport, String>;
+
 fn first_index(summaries: &[SessionSummary]) -> Option<usize> {
     if summaries.is_empty() {
         None
@@ -163,6 +231,18 @@ pub fn empty_results_message(query: &str) -> String {
     }
 }
 
+pub fn empty_state_message(query: &str, refresh_status: &RefreshStatus) -> String {
+    if matches!(refresh_status, RefreshStatus::Running { .. }) {
+        if query.trim().is_empty() {
+            "Refreshing sessions...".to_string()
+        } else {
+            format!("Refreshing matches for {:?}...", query)
+        }
+    } else {
+        empty_results_message(query)
+    }
+}
+
 pub fn meaningful_preview_messages(
     messages: &[ParsedMessage],
     limit: usize,
@@ -197,26 +277,71 @@ fn is_meaningful_message(text: &str) -> bool {
         .any(|prefix| text.starts_with(prefix))
 }
 
-pub fn run(database: &Database) -> Result<Option<String>> {
+pub fn run(database: &Database, db_path: PathBuf, sessions_dir: PathBuf) -> Result<Option<String>> {
     let _terminal_guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
     let mut state = TuiState::load(database, TUI_RESULT_LIMIT)?;
+    let refresh_results = start_refresh(db_path, sessions_dir);
+    let mut refresh_status = RefreshStatus::running();
 
     loop {
+        apply_refresh_results(database, &mut state, &mut refresh_status, &refresh_results)?;
         let preview = selected_preview(database, &state)?;
-        terminal.draw(|frame| render(frame, &state, preview.as_ref()))?;
+        terminal.draw(|frame| render(frame, &state, &refresh_status, preview.as_ref()))?;
 
-        if let Event::Key(key_event) = event::read()? {
+        if event::poll(REFRESH_TICK)? {
+            let Event::Key(key_event) = event::read()? else {
+                continue;
+            };
             match handle_key(database, &mut state, key_event)? {
                 TuiAction::Continue => {}
                 TuiAction::Quit => return Ok(None),
                 TuiAction::Resume(session_id) => return Ok(Some(session_id)),
             }
+        } else {
+            refresh_status.tick();
         }
     }
+}
+
+fn start_refresh(db_path: PathBuf, sessions_dir: PathBuf) -> Receiver<RefreshResult> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = Database::open(&db_path)
+            .and_then(|database| indexer::reindex(&database, &sessions_dir))
+            .map_err(|error| format!("{error:#}"));
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+fn apply_refresh_results(
+    database: &Database,
+    state: &mut TuiState,
+    refresh_status: &mut RefreshStatus,
+    refresh_results: &Receiver<RefreshResult>,
+) -> Result<()> {
+    while let Ok(result) = refresh_results.try_recv() {
+        match result {
+            Ok(report) => {
+                *refresh_status =
+                    RefreshStatus::complete(report.scanned_files, report.indexed_sessions);
+                state.reload(database)?;
+            }
+            Err(message) => {
+                *refresh_status = RefreshStatus::failed(short_error_message(&message));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn short_error_message(message: &str) -> String {
+    trim_to_chars(message, 96)
 }
 
 fn handle_key(database: &Database, state: &mut TuiState, key_event: KeyEvent) -> Result<TuiAction> {
@@ -269,7 +394,12 @@ fn selected_preview(database: &Database, state: &TuiState) -> Result<Option<Sess
     database.get_session(session_id)
 }
 
-fn render(frame: &mut Frame<'_>, state: &TuiState, preview: Option<&SessionDetail>) {
+fn render(
+    frame: &mut Frame<'_>,
+    state: &TuiState,
+    refresh_status: &RefreshStatus,
+    preview: Option<&SessionDetail>,
+) {
     let page_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -280,13 +410,18 @@ fn render(frame: &mut Frame<'_>, state: &TuiState, preview: Option<&SessionDetai
         ])
         .split(frame.area());
 
-    render_header(frame, page_chunks[0], state);
+    render_header(frame, page_chunks[0], state, refresh_status);
     render_search(frame, page_chunks[1], state);
-    render_body(frame, page_chunks[2], state, preview);
+    render_body(frame, page_chunks[2], state, refresh_status, preview);
     render_help(frame, page_chunks[3]);
 }
 
-fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+fn render_header(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &TuiState,
+    refresh_status: &RefreshStatus,
+) {
     let header = Line::from(vec![
         Span::styled(
             "Codex Explorer",
@@ -298,6 +433,8 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
         Span::styled(state.mode_label(), Style::default().fg(Color::Yellow)),
         Span::raw("  "),
         Span::styled(state.result_label(), secondary_style()),
+        Span::raw("  "),
+        Span::styled(refresh_status.label(), refresh_style(refresh_status)),
     ]);
     frame.render_widget(Paragraph::new(header), area);
 }
@@ -327,6 +464,7 @@ fn render_body(
     frame: &mut Frame<'_>,
     area: Rect,
     state: &TuiState,
+    refresh_status: &RefreshStatus,
     preview: Option<&SessionDetail>,
 ) {
     let body_chunks = Layout::default()
@@ -334,14 +472,19 @@ fn render_body(
         .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
         .split(area);
 
-    render_session_list(frame, body_chunks[0], state);
-    render_preview(frame, body_chunks[1], state, preview);
+    render_session_list(frame, body_chunks[0], state, refresh_status);
+    render_preview(frame, body_chunks[1], state, refresh_status, preview);
 }
 
-fn render_session_list(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+fn render_session_list(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &TuiState,
+    refresh_status: &RefreshStatus,
+) {
     let items = if state.summaries().is_empty() {
         vec![ListItem::new(vec![Line::from(Span::styled(
-            empty_results_message(state.query()),
+            empty_state_message(state.query(), refresh_status),
             secondary_style(),
         ))])]
     } else {
@@ -392,12 +535,13 @@ fn render_preview(
     frame: &mut Frame<'_>,
     area: Rect,
     state: &TuiState,
+    refresh_status: &RefreshStatus,
     preview: Option<&SessionDetail>,
 ) {
     let lines = match preview {
         Some(detail) => preview_lines(detail),
         None => vec![Line::from(Span::styled(
-            empty_results_message(state.query()),
+            empty_state_message(state.query(), refresh_status),
             secondary_style(),
         ))],
     };
@@ -522,6 +666,14 @@ fn role_style(role: &str) -> Style {
     };
 
     Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn refresh_style(refresh_status: &RefreshStatus) -> Style {
+    match refresh_status {
+        RefreshStatus::Running { .. } => Style::default().fg(Color::Cyan),
+        RefreshStatus::Complete { .. } => Style::default().fg(Color::Green),
+        RefreshStatus::Failed { .. } => Style::default().fg(Color::Red),
+    }
 }
 
 enum TuiAction {

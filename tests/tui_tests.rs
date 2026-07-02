@@ -11,8 +11,8 @@ mod tui;
 
 use db::Database;
 use tui::{
-    compact_path, compact_timestamp, empty_results_message, meaningful_preview_messages,
-    short_session_id, TuiState,
+    compact_path, compact_timestamp, empty_results_message, empty_state_message,
+    meaningful_preview_messages, short_session_id, RefreshStatus, TuiState,
 };
 
 fn fixture_sessions_dir(temp: &tempfile::TempDir) -> std::path::PathBuf {
@@ -140,6 +140,14 @@ fn display_helpers_create_compact_session_metadata() {
         empty_results_message("turnstile"),
         "No sessions match \"turnstile\""
     );
+    assert_eq!(
+        empty_state_message("", &RefreshStatus::running()),
+        "Refreshing sessions..."
+    );
+    assert_eq!(
+        empty_state_message("turnstile", &RefreshStatus::running()),
+        "Refreshing matches for \"turnstile\"..."
+    );
 }
 
 #[test]
@@ -167,4 +175,42 @@ fn preview_messages_skip_bootstrap_context_and_limit_results() {
 
     assert_eq!(preview_messages.len(), 1);
     assert_eq!(preview_messages[0].text, "build a better session browser");
+}
+
+#[test]
+fn refresh_status_reports_progress_and_outcomes() {
+    let mut status = RefreshStatus::running();
+
+    assert_eq!(status.label(), "Refreshing |");
+
+    status.tick();
+    assert_eq!(status.label(), "Refreshing /");
+
+    let complete = RefreshStatus::complete(4, 3);
+    assert_eq!(complete.label(), "Refreshed 3 sessions from 4 files");
+
+    let failed = RefreshStatus::failed("database is locked");
+    assert_eq!(failed.label(), "Refresh failed: database is locked");
+}
+
+#[test]
+fn reload_keeps_current_query_after_background_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("index.sqlite");
+    let database = Database::open(&db_path).unwrap();
+    let sessions_dir = fixture_sessions_dir(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    state.set_query(&database, "turnstile".to_string()).unwrap();
+    assert!(state.summaries().is_empty());
+
+    indexer::reindex(&database, &sessions_dir).unwrap();
+    state.reload(&database).unwrap();
+
+    assert_eq!(state.query(), "turnstile");
+    assert_eq!(state.summaries().len(), 1);
+    assert_eq!(
+        state.selected_session_id(),
+        Some("11111111-1111-4111-8111-111111111111")
+    );
 }
