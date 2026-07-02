@@ -63,3 +63,17 @@ fn title_skips_image_placeholder_lines() {
     assert_eq!(parsed.title, "explain what is broken in this screenshot");
     assert_eq!(parsed.messages.len(), 2);
 }
+
+#[test]
+fn parses_thread_source_for_subagent_sessions() {
+    let parsed =
+        codex::parse_session_file(Path::new("tests/fixtures/session-subagent.jsonl")).unwrap();
+
+    assert_eq!(parsed.session_id, "33333333-3333-4333-8333-333333333333");
+    assert_eq!(
+        parsed.parent_thread_id.as_deref(),
+        Some("11111111-1111-4111-8111-111111111111")
+    );
+    assert_eq!(parsed.thread_source.as_deref(), Some("subagent"));
+    assert!(parsed.is_subagent_thread());
+}

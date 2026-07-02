@@ -76,8 +76,10 @@ fn main() -> Result<()> {
             std::process::exit(code);
         }
         None => {
-            let database = open_database(db)?;
-            if let Some(session_id) = tui::run(&database)? {
+            let db_path = resolve_db_path(db)?;
+            let sessions_dir = resolve_sessions_dir(sessions_dir)?;
+            let database = Database::open(&db_path)?;
+            if let Some(session_id) = tui::run(&database, db_path, sessions_dir)? {
                 let command = codex_cmd::resume_command(&session_id);
                 let code = codex_cmd::run(command)?;
                 std::process::exit(code);

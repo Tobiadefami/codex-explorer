@@ -243,6 +243,38 @@ impl Database {
         Ok(Some(SessionDetail { summary, messages }))
     }
 
+    pub fn delete_source_path(&self, source_path: &Path) -> Result<usize> {
+        let source_path = source_path.display().to_string();
+        let session_ids = {
+            let mut statement = self
+                .conn
+                .prepare("SELECT session_id FROM sessions WHERE source_path = ?1")?;
+            let session_ids = statement
+                .query_map(params![source_path], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?;
+            session_ids
+        };
+
+        if session_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        for session_id in &session_ids {
+            tx.execute(
+                "DELETE FROM session_fts WHERE session_id = ?1",
+                params![session_id],
+            )?;
+            tx.execute(
+                "DELETE FROM sessions WHERE session_id = ?1",
+                params![session_id],
+            )?;
+        }
+        tx.commit()?;
+
+        Ok(session_ids.len())
+    }
+
     pub fn prune_missing_source_paths(
         &self,
         source_root: &Path,

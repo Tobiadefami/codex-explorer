@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "cx")]
 #[command(about = "Codex Explorer - find and resume Codex sessions")]
-#[command(after_help = "Run without a command to open the TUI.")]
+#[command(after_help = "Run without a command to open the TUI and refresh the index.")]
 pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub db: Option<PathBuf>,

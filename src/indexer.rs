@@ -53,6 +53,12 @@ pub fn reindex(database: &Database, sessions_dir: &Path) -> Result<ReindexReport
 
         match codex::parse_session_file(path) {
             Ok(session) => {
+                if session.is_subagent_thread() {
+                    database
+                        .delete_source_path(path)
+                        .with_context(|| format!("remove subagent session {}", path.display()))?;
+                    continue;
+                }
                 if session.malformed_records > 0 {
                     report.warnings.push(ReindexWarning {
                         path: path.display().to_string(),

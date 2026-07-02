@@ -13,7 +13,7 @@ cx show <session-id>
 cx resume <session-id>
 ```
 
-Run `cx` without a command to open the terminal session browser.
+Run `cx` without a command to open the terminal session browser. The browser opens immediately with cached sessions and refreshes the index in the background.
 
 TUI keys:
 
