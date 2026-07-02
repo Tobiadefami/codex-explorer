@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::Path};
 
 use anyhow::Result;
 use crossterm::{
@@ -9,13 +9,16 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 
-use crate::db::{Database, SessionDetail, SessionSummary};
+use crate::{
+    codex::ParsedMessage,
+    db::{Database, SessionDetail, SessionSummary},
+};
 
 const TUI_RESULT_LIMIT: usize = 50;
 
@@ -86,6 +89,31 @@ impl TuiState {
         self.selected_summary()
             .map(|summary| summary.session_id.as_str())
     }
+
+    pub fn mode_label(&self) -> &'static str {
+        if self.query.trim().is_empty() {
+            "Recent"
+        } else {
+            "Search"
+        }
+    }
+
+    pub fn result_label(&self) -> String {
+        let count = self.summaries.len();
+        let noun = if self.query.trim().is_empty() {
+            if count == 1 {
+                "session"
+            } else {
+                "sessions"
+            }
+        } else if count == 1 {
+            "match"
+        } else {
+            "matches"
+        };
+
+        format!("{count} {noun}")
+    }
 }
 
 fn first_index(summaries: &[SessionSummary]) -> Option<usize> {
@@ -94,6 +122,79 @@ fn first_index(summaries: &[SessionSummary]) -> Option<usize> {
     } else {
         Some(0)
     }
+}
+
+pub fn short_session_id(session_id: &str) -> String {
+    if session_id.len() <= 16 {
+        return session_id.to_string();
+    }
+
+    let prefix = &session_id[..8];
+    let suffix = &session_id[session_id.len() - 4..];
+    format!("{prefix}...{suffix}")
+}
+
+pub fn compact_path(path: &str) -> String {
+    if path == "/" {
+        return path.to_string();
+    }
+
+    Path::new(path)
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .filter(|file_name| !file_name.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_string())
+}
+
+pub fn compact_timestamp(timestamp: &str) -> String {
+    if timestamp.len() >= 16 && timestamp.as_bytes().get(10) == Some(&b'T') {
+        format!("{} {}", &timestamp[..10], &timestamp[11..16])
+    } else {
+        timestamp.to_string()
+    }
+}
+
+pub fn empty_results_message(query: &str) -> String {
+    if query.trim().is_empty() {
+        "No sessions indexed yet".to_string()
+    } else {
+        format!("No sessions match {:?}", query)
+    }
+}
+
+pub fn meaningful_preview_messages(
+    messages: &[ParsedMessage],
+    limit: usize,
+) -> Vec<&ParsedMessage> {
+    messages
+        .iter()
+        .filter(|message| is_meaningful_message(&message.text))
+        .take(limit)
+        .collect()
+}
+
+fn is_meaningful_message(text: &str) -> bool {
+    let text = text.trim_start();
+    if text.is_empty() {
+        return false;
+    }
+
+    const BOOTSTRAP_PREFIXES: &[&str] = &[
+        "<environment_context",
+        "<permissions instructions>",
+        "<apps_instructions>",
+        "<skills_instructions>",
+        "<plugins_instructions>",
+        "<collaboration_mode>",
+        "# AGENTS.md instructions",
+        "# CLAUDE.md instructions",
+        "# GEMINI.md instructions",
+    ];
+
+    !BOOTSTRAP_PREFIXES
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
 }
 
 pub fn run(database: &Database) -> Result<Option<String>> {
@@ -172,20 +273,53 @@ fn render(frame: &mut Frame<'_>, state: &TuiState, preview: Option<&SessionDetai
     let page_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Min(8),
-            Constraint::Length(2),
+            Constraint::Length(1),
         ])
         .split(frame.area());
 
-    render_search(frame, page_chunks[0], state);
-    render_body(frame, page_chunks[1], state, preview);
-    render_help(frame, page_chunks[2]);
+    render_header(frame, page_chunks[0], state);
+    render_search(frame, page_chunks[1], state);
+    render_body(frame, page_chunks[2], state, preview);
+    render_help(frame, page_chunks[3]);
+}
+
+fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let header = Line::from(vec![
+        Span::styled(
+            "Codex Explorer",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(state.mode_label(), Style::default().fg(Color::Yellow)),
+        Span::raw("  "),
+        Span::styled(state.result_label(), secondary_style()),
+    ]);
+    frame.render_widget(Paragraph::new(header), area);
 }
 
 fn render_search(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
-    let search =
-        Paragraph::new(state.query()).block(Block::default().title("Search").borders(Borders::ALL));
+    let search_text = if state.query().is_empty() {
+        Line::from(Span::styled(
+            "Search sessions by task, repo, error, file...",
+            secondary_style(),
+        ))
+    } else {
+        Line::from(Span::styled(
+            state.query().to_string(),
+            Style::default().fg(Color::White),
+        ))
+    };
+    let search = Paragraph::new(search_text).block(
+        Block::default()
+            .title(" Search ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     frame.render_widget(search, area);
 }
 
@@ -197,80 +331,197 @@ fn render_body(
 ) {
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
         .split(area);
 
     render_session_list(frame, body_chunks[0], state);
-    render_preview(frame, body_chunks[1], preview);
+    render_preview(frame, body_chunks[1], state, preview);
 }
 
 fn render_session_list(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
-    let items = state
-        .summaries()
-        .iter()
-        .map(|summary| {
-            let title = format!("{}  {}", summary.started_at, summary.title);
-            let cwd = format!("  {}", summary.cwd);
-            ListItem::new(vec![Line::from(title), Line::from(cwd)])
-        })
-        .collect::<Vec<_>>();
+    let items = if state.summaries().is_empty() {
+        vec![ListItem::new(vec![Line::from(Span::styled(
+            empty_results_message(state.query()),
+            secondary_style(),
+        ))])]
+    } else {
+        state
+            .summaries()
+            .iter()
+            .map(session_list_item)
+            .collect::<Vec<_>>()
+    };
 
     let list = List::new(items)
-        .block(Block::default().title("Sessions").borders(Borders::ALL))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .block(
+            Block::default()
+                .title(" Sessions ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">");
     let mut list_state = ListState::default();
     list_state.select(state.selected_index());
 
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_preview(frame: &mut Frame<'_>, area: Rect, preview: Option<&SessionDetail>) {
+fn session_list_item(summary: &SessionSummary) -> ListItem<'static> {
+    let title = Line::from(Span::styled(
+        summary.title.clone(),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+    let metadata = Line::from(vec![
+        Span::styled(compact_path(&summary.cwd), secondary_style()),
+        Span::styled("  |  ", secondary_style()),
+        Span::styled(compact_timestamp(&summary.started_at), secondary_style()),
+    ]);
+
+    ListItem::new(vec![title, metadata])
+}
+
+fn render_preview(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &TuiState,
+    preview: Option<&SessionDetail>,
+) {
     let lines = match preview {
         Some(detail) => preview_lines(detail),
-        None => vec![Line::from("No session selected")],
+        None => vec![Line::from(Span::styled(
+            empty_results_message(state.query()),
+            secondary_style(),
+        ))],
     };
     let preview = Paragraph::new(lines)
-        .block(Block::default().title("Preview").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(" Preview ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(preview, area);
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type to search | Backspace edits | Up/Down move | Enter resumes | Esc quits",
+        "Type search | Backspace edit | Up/Down move | Enter resume | Esc quit | q quit when search is empty",
     )
-    .style(Style::default().add_modifier(Modifier::DIM));
+    .style(secondary_style());
     frame.render_widget(help, area);
 }
 
 fn preview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
     let mut lines = vec![
+        section_label("Task"),
+        Line::from(Span::styled(
+            detail.summary.title.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        section_label("Context"),
         Line::from(vec![
-            Span::styled("id: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(detail.summary.session_id.clone()),
+            Span::styled("Project: ", label_style()),
+            Span::raw(compact_path(&detail.summary.cwd)),
         ]),
         Line::from(vec![
-            Span::styled("cwd: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(detail.summary.cwd.clone()),
+            Span::styled("Path: ", label_style()),
+            Span::styled(detail.summary.cwd.clone(), secondary_style()),
         ]),
         Line::from(vec![
-            Span::styled("started: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(detail.summary.started_at.clone()),
+            Span::styled("Started: ", label_style()),
+            Span::raw(compact_timestamp(&detail.summary.started_at)),
         ]),
         Line::from(""),
+        section_label("Conversation"),
     ];
 
-    for message in detail.messages.iter().take(12) {
+    let preview_messages = meaningful_preview_messages(&detail.messages, 8);
+    if preview_messages.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No useful conversation text found",
+            secondary_style(),
+        )));
+    }
+
+    for message in preview_messages {
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{}: ", message.role),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(message.text.replace('\n', " ")),
+            Span::styled(format!("{} ", message.role), role_style(&message.role)),
+            Span::raw(preview_text(&message.text)),
         ]));
     }
 
+    lines.extend([
+        Line::from(""),
+        section_label("Resume"),
+        Line::from(vec![
+            Span::styled("Session: ", label_style()),
+            Span::raw(short_session_id(&detail.summary.session_id)),
+            Span::styled("  |  Enter to resume", Style::default().fg(Color::Cyan)),
+        ]),
+    ]);
+
     lines
+}
+
+fn section_label(label: &'static str) -> Line<'static> {
+    Line::from(Span::styled(
+        label,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn preview_text(text: &str) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    trim_to_chars(&normalized, 180)
+}
+
+fn trim_to_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+
+    let mut trimmed = text
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    trimmed.push_str("...");
+    trimmed
+}
+
+fn label_style() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn secondary_style() -> Style {
+    Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM)
+}
+
+fn role_style(role: &str) -> Style {
+    let color = if role == "user" {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
 enum TuiAction {

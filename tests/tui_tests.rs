@@ -10,7 +10,10 @@ mod indexer;
 mod tui;
 
 use db::Database;
-use tui::TuiState;
+use tui::{
+    compact_path, compact_timestamp, empty_results_message, meaningful_preview_messages,
+    short_session_id, TuiState,
+};
 
 fn fixture_sessions_dir(temp: &tempfile::TempDir) -> std::path::PathBuf {
     let sessions_dir = temp.path().join("sessions");
@@ -102,4 +105,66 @@ fn empty_search_clears_selection() {
 
     assert!(state.summaries().is_empty());
     assert_eq!(state.selected_session_id(), None);
+}
+
+#[test]
+fn state_reports_recent_and_search_result_labels() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    assert_eq!(state.mode_label(), "Recent");
+    assert_eq!(state.result_label(), "2 sessions");
+
+    state.set_query(&database, "turnstile".to_string()).unwrap();
+
+    assert_eq!(state.mode_label(), "Search");
+    assert_eq!(state.result_label(), "1 match");
+}
+
+#[test]
+fn display_helpers_create_compact_session_metadata() {
+    assert_eq!(
+        short_session_id("11111111-1111-4111-8111-111111111111"),
+        "11111111...1111"
+    );
+    assert_eq!(short_session_id("short-id"), "short-id");
+    assert_eq!(compact_path("/home/chief/codex-explorer"), "codex-explorer");
+    assert_eq!(compact_path("/"), "/");
+    assert_eq!(
+        compact_timestamp("2026-07-01T10:00:00Z"),
+        "2026-07-01 10:00"
+    );
+    assert_eq!(compact_timestamp("not-a-timestamp"), "not-a-timestamp");
+    assert_eq!(
+        empty_results_message("turnstile"),
+        "No sessions match \"turnstile\""
+    );
+}
+
+#[test]
+fn preview_messages_skip_bootstrap_context_and_limit_results() {
+    let messages = vec![
+        codex::ParsedMessage {
+            timestamp: "2026-07-01T10:00:00Z".to_string(),
+            role: "user".to_string(),
+            text: "<environment_context>\n  <cwd>/work/project</cwd>\n</environment_context>"
+                .to_string(),
+        },
+        codex::ParsedMessage {
+            timestamp: "2026-07-01T10:00:01Z".to_string(),
+            role: "user".to_string(),
+            text: "build a better session browser".to_string(),
+        },
+        codex::ParsedMessage {
+            timestamp: "2026-07-01T10:00:02Z".to_string(),
+            role: "assistant".to_string(),
+            text: "I will improve the TUI layout.".to_string(),
+        },
+    ];
+
+    let preview_messages = meaningful_preview_messages(&messages, 1);
+
+    assert_eq!(preview_messages.len(), 1);
+    assert_eq!(preview_messages[0].text, "build a better session browser");
 }
