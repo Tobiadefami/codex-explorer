@@ -15,12 +15,20 @@ pub struct ParsedSession {
     pub cwd: String,
     pub cli_version: Option<String>,
     pub model_provider: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub thread_source: Option<String>,
     pub source_path: PathBuf,
     pub modified_unix_seconds: i64,
     pub title: String,
     pub messages: Vec<ParsedMessage>,
     pub searchable_text: String,
     pub malformed_records: usize,
+}
+
+impl ParsedSession {
+    pub fn is_subagent_thread(&self) -> bool {
+        self.thread_source.as_deref() == Some("subagent")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +64,8 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
     let mut cwd = None;
     let mut cli_version = None;
     let mut model_provider = None;
+    let mut parent_thread_id = None;
+    let mut thread_source = None;
     let mut messages = Vec::new();
     let mut malformed_records = 0usize;
 
@@ -80,6 +90,8 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
             cwd = string_field(&record.payload, "cwd");
             cli_version = string_field(&record.payload, "cli_version");
             model_provider = string_field(&record.payload, "model_provider");
+            parent_thread_id = string_field(&record.payload, "parent_thread_id");
+            thread_source = string_field(&record.payload, "thread_source");
             continue;
         }
 
@@ -114,6 +126,8 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
         cwd,
         cli_version,
         model_provider,
+        parent_thread_id,
+        thread_source,
         source_path: path.to_path_buf(),
         modified_unix_seconds,
         title,

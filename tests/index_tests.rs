@@ -185,6 +185,60 @@ fn reindex_prunes_sessions_when_source_files_are_removed() {
     assert!(database.list_sessions(10).unwrap().is_empty());
 }
 
+#[test]
+fn reindex_excludes_subagent_threads_from_top_level_sessions() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-subagent.jsonl",
+        sessions_dir.join("session-subagent.jsonl"),
+    )
+    .unwrap();
+
+    let database = db::Database::open(&temp.path().join("index.sqlite")).unwrap();
+    let report = indexer::reindex(&database, &sessions_dir).unwrap();
+
+    assert_eq!(report.scanned_files, 2);
+    assert_eq!(report.indexed_sessions, 1);
+
+    let sessions = database.list_sessions(10).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(
+        sessions[0].session_id,
+        "11111111-1111-4111-8111-111111111111"
+    );
+    assert!(database
+        .search_sessions("review implementation", 10)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn reindex_removes_previously_indexed_subagent_threads() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    let subagent_path = sessions_dir.join("session-subagent.jsonl");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy("tests/fixtures/session-subagent.jsonl", &subagent_path).unwrap();
+
+    let database = db::Database::open(&temp.path().join("index.sqlite")).unwrap();
+    let parsed_subagent = codex::parse_session_file(&subagent_path).unwrap();
+    database.upsert_session(&parsed_subagent).unwrap();
+    assert_eq!(database.list_sessions(10).unwrap().len(), 1);
+
+    let report = indexer::reindex(&database, &sessions_dir).unwrap();
+
+    assert_eq!(report.scanned_files, 1);
+    assert_eq!(report.indexed_sessions, 0);
+    assert!(database.list_sessions(10).unwrap().is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn reindex_does_not_prune_after_traversal_errors() {
