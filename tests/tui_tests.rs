@@ -6,14 +6,16 @@ mod db;
 #[path = "../src/indexer.rs"]
 mod indexer;
 #[allow(dead_code)]
-#[path = "../src/tui.rs"]
+#[path = "../src/tui/mod.rs"]
 mod tui;
 
 use db::Database;
-use tui::{
+use tui::format::{
     compact_path, compact_timestamp, empty_results_message, empty_state_message,
-    meaningful_preview_messages, short_session_id, ProjectScope, RefreshStatus, TuiState,
+    meaningful_preview_messages, short_session_id,
 };
+use tui::refresh::RefreshStatus;
+use tui::state::{ProjectScope, TuiState};
 
 fn fixture_sessions_dir(temp: &tempfile::TempDir) -> std::path::PathBuf {
     let sessions_dir = temp.path().join("sessions");
