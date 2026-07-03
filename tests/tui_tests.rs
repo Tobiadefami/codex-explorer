@@ -12,7 +12,7 @@ mod tui;
 use db::Database;
 use tui::{
     compact_path, compact_timestamp, empty_results_message, empty_state_message,
-    meaningful_preview_messages, short_session_id, RefreshStatus, TuiState,
+    meaningful_preview_messages, short_session_id, ProjectScope, RefreshStatus, TuiState,
 };
 
 fn fixture_sessions_dir(temp: &tempfile::TempDir) -> std::path::PathBuf {
@@ -35,6 +35,23 @@ fn indexed_database(temp: &tempfile::TempDir) -> Database {
     let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
     let sessions_dir = fixture_sessions_dir(temp);
     indexer::reindex(&database, &sessions_dir).unwrap();
+    database
+}
+
+fn scoped_database(temp: &tempfile::TempDir) -> Database {
+    let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+    let mut first =
+        codex::parse_session_file(std::path::Path::new("tests/fixtures/session-a.jsonl")).unwrap();
+    first.cwd = "/work/project-a".to_string();
+    database.upsert_session(&first).unwrap();
+
+    let mut second = codex::parse_session_file(std::path::Path::new(
+        "tests/fixtures/session-malformed.jsonl",
+    ))
+    .unwrap();
+    second.cwd = "/work/project-b".to_string();
+    database.upsert_session(&second).unwrap();
+
     database
 }
 
@@ -113,7 +130,7 @@ fn state_reports_recent_and_search_result_labels() {
     let database = indexed_database(&temp);
     let mut state = TuiState::load(&database, 20).unwrap();
 
-    assert_eq!(state.mode_label(), "Recent");
+    assert_eq!(state.mode_label(), "All projects");
     assert_eq!(state.result_label(), "2 sessions");
 
     state.set_query(&database, "turnstile".to_string()).unwrap();
@@ -213,4 +230,70 @@ fn reload_keeps_current_query_after_background_refresh() {
         state.selected_session_id(),
         Some("11111111-1111-4111-8111-111111111111")
     );
+}
+
+#[test]
+fn scoped_state_defaults_to_current_directory_sessions() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = scoped_database(&temp);
+
+    let state = TuiState::load_scoped(&database, "/work/project-a".into(), 20).unwrap();
+
+    assert_eq!(state.scope(), &ProjectScope::CurrentDirectory);
+    assert_eq!(state.scope_label(), "Current directory");
+    assert_eq!(state.summaries().len(), 1);
+    assert_eq!(
+        state.selected_session_id(),
+        Some("11111111-1111-4111-8111-111111111111")
+    );
+}
+
+#[test]
+fn scoped_state_can_toggle_between_current_directory_and_all_projects() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = scoped_database(&temp);
+    let mut state = TuiState::load_scoped(&database, "/work/project-a".into(), 20).unwrap();
+
+    state.show_all_projects(&database).unwrap();
+    assert_eq!(state.scope(), &ProjectScope::AllProjects);
+    assert_eq!(state.scope_label(), "All projects");
+    assert_eq!(state.summaries().len(), 2);
+
+    state.show_current_directory(&database).unwrap();
+    assert_eq!(state.scope(), &ProjectScope::CurrentDirectory);
+    assert_eq!(state.summaries().len(), 1);
+}
+
+#[test]
+fn scoped_state_falls_back_to_all_projects_when_current_directory_has_no_sessions() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = scoped_database(&temp);
+
+    let state = TuiState::load_scoped(&database, "/work/missing".into(), 20).unwrap();
+
+    assert_eq!(state.scope(), &ProjectScope::AllProjects);
+    assert_eq!(state.scope_label(), "All projects");
+    assert_eq!(
+        state.scope_note(),
+        Some("No sessions for current directory")
+    );
+    assert_eq!(state.summaries().len(), 2);
+}
+
+#[test]
+fn preview_scroll_moves_and_resets_on_selection_change() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    state.scroll_preview_down();
+    state.scroll_preview_down();
+    assert_eq!(state.preview_scroll(), 2);
+
+    state.move_down();
+    assert_eq!(state.preview_scroll(), 0);
+
+    state.scroll_preview_down();
+    state.scroll_preview_up();
+    assert_eq!(state.preview_scroll(), 0);
 }

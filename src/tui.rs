@@ -30,11 +30,21 @@ use crate::{
 const TUI_RESULT_LIMIT: usize = 50;
 const REFRESH_TICK: Duration = Duration::from_millis(120);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectScope {
+    CurrentDirectory,
+    AllProjects,
+}
+
 pub struct TuiState {
     query: String,
     summaries: Vec<SessionSummary>,
     selected_index: Option<usize>,
     limit: usize,
+    current_dir: Option<PathBuf>,
+    scope: ProjectScope,
+    scope_note: Option<String>,
+    preview_scroll: usize,
 }
 
 impl TuiState {
@@ -47,6 +57,33 @@ impl TuiState {
             summaries,
             selected_index,
             limit,
+            current_dir: None,
+            scope: ProjectScope::AllProjects,
+            scope_note: None,
+            preview_scroll: 0,
+        })
+    }
+
+    pub fn load_scoped(database: &Database, current_dir: PathBuf, limit: usize) -> Result<Self> {
+        let cwd = current_dir.display().to_string();
+        let summaries = database.list_sessions_for_cwd(&cwd, limit)?;
+        if summaries.is_empty() {
+            let mut state = Self::load(database, limit)?;
+            state.current_dir = Some(current_dir);
+            state.scope_note = Some("No sessions for current directory".to_string());
+            return Ok(state);
+        }
+
+        let selected_index = first_index(&summaries);
+        Ok(Self {
+            query: String::new(),
+            summaries,
+            selected_index,
+            limit,
+            current_dir: Some(current_dir),
+            scope: ProjectScope::CurrentDirectory,
+            scope_note: None,
+            preview_scroll: 0,
         })
     }
 
@@ -58,18 +95,81 @@ impl TuiState {
         &self.summaries
     }
 
+    pub fn scope(&self) -> &ProjectScope {
+        &self.scope
+    }
+
+    pub fn scope_label(&self) -> &'static str {
+        match self.scope() {
+            ProjectScope::CurrentDirectory => "Current directory",
+            ProjectScope::AllProjects => "All projects",
+        }
+    }
+
+    pub fn scope_note(&self) -> Option<&str> {
+        self.scope_note.as_deref()
+    }
+
+    pub fn preview_scroll(&self) -> usize {
+        self.preview_scroll
+    }
+
     pub fn set_query(&mut self, database: &Database, query: String) -> Result<()> {
         self.query = query;
         self.reload(database)
     }
 
     pub fn reload(&mut self, database: &Database) -> Result<()> {
-        self.summaries = if self.query.trim().is_empty() {
-            database.list_sessions(self.limit)?
-        } else {
-            database.search_sessions(&self.query, self.limit)?
-        };
+        self.summaries = self.load_summaries(database)?;
         self.selected_index = first_index(&self.summaries);
+        self.preview_scroll = 0;
+        Ok(())
+    }
+
+    fn load_summaries(&self, database: &Database) -> Result<Vec<SessionSummary>> {
+        match self.scope {
+            ProjectScope::CurrentDirectory => {
+                let Some(current_dir) = &self.current_dir else {
+                    return self.load_all_summaries(database);
+                };
+                let cwd = current_dir.display().to_string();
+                if self.query.trim().is_empty() {
+                    database.list_sessions_for_cwd(&cwd, self.limit)
+                } else {
+                    database.search_sessions_for_cwd(&cwd, &self.query, self.limit)
+                }
+            }
+            ProjectScope::AllProjects => self.load_all_summaries(database),
+        }
+    }
+
+    fn load_all_summaries(&self, database: &Database) -> Result<Vec<SessionSummary>> {
+        if self.query.trim().is_empty() {
+            database.list_sessions(self.limit)
+        } else {
+            database.search_sessions(&self.query, self.limit)
+        }
+    }
+
+    pub fn show_all_projects(&mut self, database: &Database) -> Result<()> {
+        self.scope = ProjectScope::AllProjects;
+        self.scope_note = None;
+        self.reload(database)
+    }
+
+    pub fn show_current_directory(&mut self, database: &Database) -> Result<()> {
+        if self.current_dir.is_none() {
+            return self.show_all_projects(database);
+        }
+
+        self.scope = ProjectScope::CurrentDirectory;
+        self.scope_note = None;
+        self.reload(database)?;
+        if self.summaries.is_empty() && self.query.trim().is_empty() {
+            self.scope = ProjectScope::AllProjects;
+            self.scope_note = Some("No sessions for current directory".to_string());
+            self.reload(database)?;
+        }
         Ok(())
     }
 
@@ -79,6 +179,7 @@ impl TuiState {
         };
         let last_index = self.summaries.len().saturating_sub(1);
         self.selected_index = Some((selected_index + 1).min(last_index));
+        self.preview_scroll = 0;
     }
 
     pub fn move_up(&mut self) {
@@ -86,6 +187,27 @@ impl TuiState {
             return;
         };
         self.selected_index = Some(selected_index.saturating_sub(1));
+        self.preview_scroll = 0;
+    }
+
+    pub fn scroll_preview_down(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_add(1);
+    }
+
+    pub fn scroll_preview_page_down(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_add(8);
+    }
+
+    pub fn scroll_preview_up(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_sub(1);
+    }
+
+    pub fn scroll_preview_page_up(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_sub(8);
+    }
+
+    pub fn scroll_preview_top(&mut self) {
+        self.preview_scroll = 0;
     }
 
     pub fn selected_summary(&self) -> Option<&SessionSummary> {
@@ -104,7 +226,7 @@ impl TuiState {
 
     pub fn mode_label(&self) -> &'static str {
         if self.query.trim().is_empty() {
-            "Recent"
+            self.scope_label()
         } else {
             "Search"
         }
@@ -277,13 +399,18 @@ fn is_meaningful_message(text: &str) -> bool {
         .any(|prefix| text.starts_with(prefix))
 }
 
-pub fn run(database: &Database, db_path: PathBuf, sessions_dir: PathBuf) -> Result<Option<String>> {
+pub fn run(
+    database: &Database,
+    db_path: PathBuf,
+    sessions_dir: PathBuf,
+    current_dir: PathBuf,
+) -> Result<Option<String>> {
     let _terminal_guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let mut state = TuiState::load(database, TUI_RESULT_LIMIT)?;
+    let mut state = TuiState::load_scoped(database, current_dir, TUI_RESULT_LIMIT)?;
     let refresh_results = start_refresh(db_path, sessions_dir);
     let mut refresh_status = RefreshStatus::running();
 
@@ -359,6 +486,18 @@ fn handle_key(database: &Database, state: &mut TuiState, key_event: KeyEvent) ->
             state.move_down();
             Ok(TuiAction::Continue)
         }
+        KeyCode::PageDown => {
+            state.scroll_preview_page_down();
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::PageUp => {
+            state.scroll_preview_page_up();
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Home => {
+            state.scroll_preview_top();
+            Ok(TuiAction::Continue)
+        }
         KeyCode::Backspace => {
             let mut query = state.query().to_string();
             query.pop();
@@ -369,6 +508,22 @@ fn handle_key(database: &Database, state: &mut TuiState, key_event: KeyEvent) ->
             Ok(TuiAction::Quit)
         }
         KeyCode::Char('q') if state.query().is_empty() => Ok(TuiAction::Quit),
+        KeyCode::Char('a') if state.query().is_empty() => {
+            state.show_all_projects(database)?;
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Char('p') if state.query().is_empty() => {
+            state.show_current_directory(database)?;
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Char('d') if state.query().is_empty() => {
+            state.scroll_preview_down();
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Char('u') if state.query().is_empty() => {
+            state.scroll_preview_up();
+            Ok(TuiAction::Continue)
+        }
         KeyCode::Char('j') if state.query().is_empty() => {
             state.move_down();
             Ok(TuiAction::Continue)
@@ -435,6 +590,8 @@ fn render_header(
         Span::styled(state.result_label(), secondary_style()),
         Span::raw("  "),
         Span::styled(refresh_status.label(), refresh_style(refresh_status)),
+        Span::raw("  "),
+        Span::styled(scope_note_label(state), secondary_style()),
     ]);
     frame.render_widget(Paragraph::new(header), area);
 }
@@ -552,16 +709,21 @@ fn render_preview(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)),
         )
+        .scroll((state.preview_scroll() as u16, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(preview, area);
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type search | Backspace edit | Up/Down move | Enter resume | Esc quit | q quit when search is empty",
+        "Type search | a all | p project | Up/Down select | PgUp/PgDn preview | Enter resume | Esc quit",
     )
     .style(secondary_style());
     frame.render_widget(help, area);
+}
+
+fn scope_note_label(state: &TuiState) -> String {
+    state.scope_note().unwrap_or("").to_string()
 }
 
 fn preview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {

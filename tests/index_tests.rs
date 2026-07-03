@@ -89,6 +89,38 @@ fn search_treats_user_input_as_plain_text() {
 }
 
 #[test]
+fn lists_and_searches_sessions_for_exact_cwd() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("index.sqlite");
+    let database = db::Database::open(&db_path).unwrap();
+    let mut first = codex::parse_session_file(Path::new("tests/fixtures/session-a.jsonl")).unwrap();
+    first.cwd = "/work/project-a".to_string();
+    database.upsert_session(&first).unwrap();
+
+    let mut second =
+        codex::parse_session_file(Path::new("tests/fixtures/session-malformed.jsonl")).unwrap();
+    second.cwd = "/work/project-b".to_string();
+    database.upsert_session(&second).unwrap();
+
+    let project_a_sessions = database
+        .list_sessions_for_cwd("/work/project-a", 10)
+        .unwrap();
+    assert_eq!(project_a_sessions.len(), 1);
+    assert_eq!(project_a_sessions[0].session_id, first.session_id);
+
+    let project_a_matches = database
+        .search_sessions_for_cwd("/work/project-a", "turnstile", 10)
+        .unwrap();
+    assert_eq!(project_a_matches.len(), 1);
+    assert_eq!(project_a_matches[0].session_id, first.session_id);
+
+    assert!(database
+        .search_sessions_for_cwd("/work/project-b", "turnstile", 10)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn reindexes_all_jsonl_files_in_a_sessions_directory() {
     let temp = tempfile::tempdir().unwrap();
     let sessions_dir = temp.path().join("sessions");
