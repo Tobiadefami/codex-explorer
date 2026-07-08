@@ -56,6 +56,16 @@ fn help_mentions_codex_explorer() {
 }
 
 #[test]
+fn version_prints_installed_binary_name() {
+    Command::cargo_bin("cx")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::eq("cx 0.1.0\n"));
+}
+
+#[test]
 fn reindex_and_search_from_cli() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("index.sqlite");

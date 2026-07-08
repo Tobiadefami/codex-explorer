@@ -2,6 +2,8 @@
 name = "cx"
 version = "0.1.0"
 edition = "2021"
+description = "A local Codex session manager for searching, previewing, and resuming Codex sessions."
+readme = "README.md"
 
 [[bin]]
 name = "cx"
