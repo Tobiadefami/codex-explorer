@@ -4,6 +4,19 @@ version = "0.1.0"
 edition = "2021"
 description = "A local Codex session manager for searching, previewing, and resuming Codex sessions."
 readme = "README.md"
+license = "MIT"
+repository = "https://github.com/Tobiadefami/codex-explorer"
+homepage = "https://github.com/Tobiadefami/codex-explorer"
+keywords = ["codex", "cli", "tui", "sessions"]
+categories = ["command-line-utilities"]
+include = [
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "src/**",
+    "tests/**",
+]
 
 [[bin]]
 name = "cx"
