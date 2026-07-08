@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "cx")]
+#[command(version)]
 #[command(about = "Codex Explorer - find and resume Codex sessions")]
 #[command(after_help = "Run without a command to open the TUI and refresh the index.")]
 pub struct Cli {

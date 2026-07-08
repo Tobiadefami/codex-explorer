@@ -2,6 +2,26 @@
 
 Codex Explorer is a local Codex session manager. The `cx` command indexes `~/.codex/sessions/**/*.jsonl` so you can search, preview, and resume old Codex sessions without remembering the exact date.
 
+## Install
+
+From this checkout:
+
+```bash
+cargo install --path . --locked
+```
+
+Cargo installs the `cx` binary into `~/.cargo/bin`. Make sure that directory is on your `PATH`, then verify the installed command:
+
+```bash
+cx --version
+```
+
+To reinstall from a newer checkout:
+
+```bash
+cargo install --path . --locked --force
+```
+
 ## Commands
 
 ```bash
