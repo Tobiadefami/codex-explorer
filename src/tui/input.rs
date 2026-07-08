@@ -3,11 +3,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::db::Database;
 
-use super::state::TuiState;
+use super::state::{PreviewMode, TuiState};
 
 pub(super) enum TuiAction {
     Continue,
     Quit,
+    Refresh,
     Resume(String),
 }
 
@@ -60,6 +61,23 @@ pub(super) fn handle_key(
             state.show_current_directory(database)?;
             Ok(TuiAction::Continue)
         }
+        KeyCode::Char('r') if state.query().is_empty() => Ok(TuiAction::Refresh),
+        KeyCode::Char('1') if state.query().is_empty() => {
+            state.set_preview_mode(PreviewMode::Overview);
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Char('2') if state.query().is_empty() => {
+            state.set_preview_mode(PreviewMode::Conversation);
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Char('3') if state.query().is_empty() => {
+            state.set_preview_mode(PreviewMode::Tools);
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Char('4') if state.query().is_empty() => {
+            state.set_preview_mode(PreviewMode::Skills);
+            Ok(TuiAction::Continue)
+        }
         KeyCode::Char('d') if state.query().is_empty() => {
             state.scroll_preview_down();
             Ok(TuiAction::Continue)
@@ -83,5 +101,27 @@ pub(super) fn handle_key(
             Ok(TuiAction::Continue)
         }
         _ => Ok(TuiAction::Continue),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn r_requests_refresh_when_search_is_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        let action = handle_key(
+            &database,
+            &mut state,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+        )
+        .unwrap();
+
+        assert!(matches!(action, TuiAction::Refresh));
+        assert_eq!(state.query(), "");
     }
 }

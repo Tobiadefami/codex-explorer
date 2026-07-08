@@ -10,6 +10,14 @@ pub enum ProjectScope {
     AllProjects,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewMode {
+    Overview,
+    Conversation,
+    Tools,
+    Skills,
+}
+
 pub struct TuiState {
     query: String,
     summaries: Vec<SessionSummary>,
@@ -19,6 +27,7 @@ pub struct TuiState {
     scope: ProjectScope,
     scope_note: Option<String>,
     preview_scroll: usize,
+    preview_mode: PreviewMode,
 }
 
 impl TuiState {
@@ -35,6 +44,7 @@ impl TuiState {
             scope: ProjectScope::AllProjects,
             scope_note: None,
             preview_scroll: 0,
+            preview_mode: PreviewMode::Overview,
         })
     }
 
@@ -58,6 +68,7 @@ impl TuiState {
             scope: ProjectScope::CurrentDirectory,
             scope_note: None,
             preview_scroll: 0,
+            preview_mode: PreviewMode::Overview,
         })
     }
 
@@ -86,6 +97,24 @@ impl TuiState {
 
     pub fn preview_scroll(&self) -> usize {
         self.preview_scroll
+    }
+
+    pub fn preview_mode(&self) -> PreviewMode {
+        self.preview_mode
+    }
+
+    pub fn preview_mode_label(&self) -> &'static str {
+        match self.preview_mode {
+            PreviewMode::Overview => "Overview",
+            PreviewMode::Conversation => "Conversation",
+            PreviewMode::Tools => "Tools",
+            PreviewMode::Skills => "Skills",
+        }
+    }
+
+    pub fn set_preview_mode(&mut self, preview_mode: PreviewMode) {
+        self.preview_mode = preview_mode;
+        self.preview_scroll = 0;
     }
 
     pub fn set_query(&mut self, database: &Database, query: String) -> Result<()> {

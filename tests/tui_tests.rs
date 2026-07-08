@@ -11,11 +11,11 @@ mod tui;
 
 use db::Database;
 use tui::format::{
-    compact_path, compact_timestamp, empty_results_message, empty_state_message,
-    meaningful_preview_messages, short_session_id,
+    compact_path, compact_timestamp, conversation_windows, empty_results_message,
+    empty_state_message, group_skill_evidence, group_tool_events, short_session_id,
 };
 use tui::refresh::RefreshStatus;
-use tui::state::{ProjectScope, TuiState};
+use tui::state::{PreviewMode, ProjectScope, TuiState};
 
 fn fixture_sessions_dir(temp: &tempfile::TempDir) -> std::path::PathBuf {
     let sessions_dir = temp.path().join("sessions");
@@ -142,6 +142,28 @@ fn state_reports_recent_and_search_result_labels() {
 }
 
 #[test]
+fn state_tracks_preview_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    assert_eq!(state.preview_mode(), PreviewMode::Overview);
+    assert_eq!(state.preview_mode_label(), "Overview");
+
+    state.set_preview_mode(PreviewMode::Conversation);
+    assert_eq!(state.preview_mode(), PreviewMode::Conversation);
+    assert_eq!(state.preview_mode_label(), "Conversation");
+
+    state.scroll_preview_down();
+    state.set_preview_mode(PreviewMode::Tools);
+    assert_eq!(state.preview_mode(), PreviewMode::Tools);
+    assert_eq!(state.preview_scroll(), 0);
+
+    state.set_preview_mode(PreviewMode::Skills);
+    assert_eq!(state.preview_mode(), PreviewMode::Skills);
+}
+
+#[test]
 fn display_helpers_create_compact_session_metadata() {
     assert_eq!(
         short_session_id("11111111-1111-4111-8111-111111111111"),
@@ -190,10 +212,111 @@ fn preview_messages_skip_bootstrap_context_and_limit_results() {
         },
     ];
 
-    let preview_messages = meaningful_preview_messages(&messages, 1);
+    let windows = conversation_windows(&messages, 1);
 
-    assert_eq!(preview_messages.len(), 1);
-    assert_eq!(preview_messages[0].text, "build a better session browser");
+    assert_eq!(windows.opening.len(), 2);
+    assert_eq!(windows.opening[0].text, "build a better session browser");
+    assert_eq!(windows.opening[1].text, "I will improve the TUI layout.");
+    assert_eq!(windows.omitted_count, 0);
+    assert!(windows.recent.is_empty());
+}
+
+#[test]
+fn conversation_windows_return_opening_and_recent_messages_without_overlap() {
+    let messages = (0..12)
+        .map(|index| codex::ParsedMessage {
+            timestamp: format!("2026-07-01T10:{index:02}:00Z"),
+            role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+            text: format!("message {index}"),
+        })
+        .collect::<Vec<_>>();
+
+    let windows = conversation_windows(&messages, 5);
+
+    assert_eq!(windows.opening.len(), 5);
+    assert_eq!(windows.opening[0].text, "message 0");
+    assert_eq!(windows.opening[4].text, "message 4");
+    assert_eq!(windows.omitted_count, 2);
+    assert_eq!(windows.recent.len(), 5);
+    assert_eq!(windows.recent[0].text, "message 7");
+    assert_eq!(windows.recent[4].text, "message 11");
+}
+
+#[test]
+fn tool_event_groups_collect_scannable_categories() {
+    let events = vec![
+        codex::ParsedToolEvent {
+            timestamp: "2026-07-01T10:00:00Z".to_string(),
+            kind: "function_call".to_string(),
+            name: "exec_command".to_string(),
+            summary: "cargo test".to_string(),
+            status: None,
+        },
+        codex::ParsedToolEvent {
+            timestamp: "2026-07-01T10:01:00Z".to_string(),
+            kind: "patch_apply_end".to_string(),
+            name: "apply_patch".to_string(),
+            summary: "src/tui/render.rs".to_string(),
+            status: Some("completed".to_string()),
+        },
+        codex::ParsedToolEvent {
+            timestamp: "2026-07-01T10:02:00Z".to_string(),
+            kind: "web_search_end".to_string(),
+            name: "web_search".to_string(),
+            summary: "Codex hooks".to_string(),
+            status: None,
+        },
+        codex::ParsedToolEvent {
+            timestamp: "2026-07-01T10:03:00Z".to_string(),
+            kind: "function_call_output".to_string(),
+            name: "function_call_output".to_string(),
+            summary: "test failed".to_string(),
+            status: Some("failed".to_string()),
+        },
+    ];
+
+    let groups = group_tool_events(&events);
+
+    assert_eq!(groups.commands.len(), 1);
+    assert_eq!(groups.file_changes.len(), 1);
+    assert_eq!(groups.web_searches.len(), 1);
+    assert_eq!(groups.failure_count, 1);
+}
+
+#[test]
+fn skill_evidence_groups_by_skill_name() {
+    let evidence = vec![
+        codex::ParsedSkillEvidence {
+            timestamp: "2026-07-01T10:00:00Z".to_string(),
+            skill_name: "superpowers:brainstorming".to_string(),
+            evidence_type: "skill_file_read".to_string(),
+            confidence: "high".to_string(),
+            detail: "read SKILL.md".to_string(),
+        },
+        codex::ParsedSkillEvidence {
+            timestamp: "2026-07-01T10:01:00Z".to_string(),
+            skill_name: "superpowers:brainstorming".to_string(),
+            evidence_type: "assistant_announcement".to_string(),
+            confidence: "medium".to_string(),
+            detail: "Using `superpowers:brainstorming`".to_string(),
+        },
+        codex::ParsedSkillEvidence {
+            timestamp: "2026-07-01T10:02:00Z".to_string(),
+            skill_name: "openai-docs".to_string(),
+            evidence_type: "skill_file_read".to_string(),
+            confidence: "high".to_string(),
+            detail: "read SKILL.md".to_string(),
+        },
+    ];
+
+    let groups = group_skill_evidence(&evidence);
+
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].skill_name, "superpowers:brainstorming");
+    assert_eq!(groups[0].highest_confidence, "high");
+    assert_eq!(groups[0].evidence.len(), 2);
+    assert_eq!(groups[1].skill_name, "openai-docs");
+    assert_eq!(groups[1].evidence.len(), 1);
 }
 
 #[test]

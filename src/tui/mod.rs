@@ -34,7 +34,7 @@ pub fn run(
     terminal.clear()?;
 
     let mut state = TuiState::load_scoped(database, current_dir, TUI_RESULT_LIMIT)?;
-    let refresh_results = start_refresh(db_path, sessions_dir);
+    let mut refresh_results = start_refresh(db_path.clone(), sessions_dir.clone());
     let mut refresh_status = RefreshStatus::running();
 
     loop {
@@ -49,6 +49,12 @@ pub fn run(
             match handle_key(database, &mut state, key_event)? {
                 TuiAction::Continue => {}
                 TuiAction::Quit => return Ok(None),
+                TuiAction::Refresh => {
+                    if !refresh_status.is_running() {
+                        refresh_results = start_refresh(db_path.clone(), sessions_dir.clone());
+                        refresh_status = RefreshStatus::running();
+                    }
+                }
                 TuiAction::Resume(session_id) => return Ok(Some(session_id)),
             }
         } else {

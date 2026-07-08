@@ -10,11 +10,11 @@ use crate::db::{SessionDetail, SessionSummary};
 
 use super::{
     format::{
-        compact_path, compact_timestamp, empty_state_message, meaningful_preview_messages,
-        preview_text, short_session_id,
+        compact_path, compact_timestamp, conversation_windows, empty_state_message,
+        group_skill_evidence, group_tool_events, preview_text, short_session_id,
     },
     refresh::RefreshStatus,
-    state::TuiState,
+    state::{PreviewMode, TuiState},
 };
 
 pub(super) fn render(
@@ -141,19 +141,12 @@ fn render_session_list(
 }
 
 fn session_list_item(summary: &SessionSummary) -> ListItem<'static> {
-    let title = Line::from(Span::styled(
+    ListItem::new(Line::from(Span::styled(
         summary.title.clone(),
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
-    ));
-    let metadata = Line::from(vec![
-        Span::styled(compact_path(&summary.cwd), secondary_style()),
-        Span::styled("  |  ", secondary_style()),
-        Span::styled(compact_timestamp(&summary.started_at), secondary_style()),
-    ]);
-
-    ListItem::new(vec![title, metadata])
+    )))
 }
 
 fn render_preview(
@@ -164,7 +157,7 @@ fn render_preview(
     preview: Option<&SessionDetail>,
 ) {
     let lines = match preview {
-        Some(detail) => preview_lines(detail),
+        Some(detail) => preview_lines(state.preview_mode(), detail),
         None => vec![Line::from(Span::styled(
             empty_state_message(state.query(), refresh_status),
             secondary_style(),
@@ -173,7 +166,7 @@ fn render_preview(
     let preview = Paragraph::new(lines)
         .block(
             Block::default()
-                .title(" Preview ")
+                .title(format!(" {} ", state.preview_mode_label()))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)),
         )
@@ -184,7 +177,7 @@ fn render_preview(
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type search | a all | p project | Up/Down select | PgUp/PgDn preview | Enter resume | Esc quit",
+        "Type search | r reindex | 1 overview | 2 conversation | 3 tools | 4 skills | a all | p project | Enter resume | Esc quit",
     )
     .style(secondary_style());
     frame.render_widget(help, area);
@@ -194,9 +187,18 @@ fn scope_note_label(state: &TuiState) -> String {
     state.scope_note().unwrap_or("").to_string()
 }
 
-fn preview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
+fn preview_lines(preview_mode: PreviewMode, detail: &SessionDetail) -> Vec<Line<'static>> {
+    match preview_mode {
+        PreviewMode::Overview => overview_lines(detail),
+        PreviewMode::Conversation => conversation_lines(detail),
+        PreviewMode::Tools => tool_lines(detail),
+        PreviewMode::Skills => skill_lines(detail),
+    }
+}
+
+fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
     let mut lines = vec![
-        section_label("Task"),
+        section_label("Started With"),
         Line::from(Span::styled(
             detail.summary.title.clone(),
             Style::default()
@@ -204,7 +206,13 @@ fn preview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        section_label("Context"),
+        section_label("Most Recent User Message"),
+        message_or_empty(latest_user_message(detail)),
+        Line::from(""),
+        section_label("Last Assistant Response"),
+        message_or_empty(latest_assistant_message(detail)),
+        Line::from(""),
+        section_label("Session Details"),
         Line::from(vec![
             Span::styled("Project: ", label_style()),
             Span::raw(compact_path(&detail.summary.cwd)),
@@ -217,41 +225,238 @@ fn preview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
             Span::styled("Started: ", label_style()),
             Span::raw(compact_timestamp(&detail.summary.started_at)),
         ]),
+        Line::from(vec![
+            Span::styled("Last active: ", label_style()),
+            Span::raw(compact_timestamp(&detail.summary.last_activity_at)),
+        ]),
         Line::from(""),
-        section_label("Conversation"),
+        section_label("Counts"),
+        Line::from(vec![
+            Span::styled("Messages: ", label_style()),
+            Span::raw(detail.messages.len().to_string()),
+            Span::styled("  Tools: ", label_style()),
+            Span::raw(detail.tool_events.len().to_string()),
+            Span::styled("  Skills: ", label_style()),
+            Span::raw(detail.skill_evidence.len().to_string()),
+        ]),
     ];
 
-    let preview_messages = meaningful_preview_messages(&detail.messages, 8);
-    if preview_messages.is_empty() {
+    add_action_lines(&mut lines, detail);
+    lines
+}
+
+fn conversation_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
+    let windows = conversation_windows(&detail.messages, 5);
+    let mut lines = vec![section_label("Opening Messages")];
+
+    if windows.opening.is_empty() {
         lines.push(Line::from(Span::styled(
             "No useful conversation text found",
             secondary_style(),
         )));
+    } else {
+        append_messages(&mut lines, &windows.opening);
     }
 
-    for message in preview_messages {
+    if windows.omitted_count > 0 {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("... {} messages omitted ...", windows.omitted_count),
+            secondary_style(),
+        )));
+    }
+
+    if !windows.recent.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_label("Recent Messages"));
+        append_messages(&mut lines, &windows.recent);
+    }
+
+    add_action_lines(&mut lines, detail);
+
+    lines
+}
+
+fn tool_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
+    let groups = group_tool_events(&detail.tool_events);
+    let mut lines = vec![
+        section_label("Tool Summary"),
+        Line::from(vec![
+            Span::styled("Commands: ", label_style()),
+            Span::raw(groups.commands.len().to_string()),
+            Span::styled("  File changes: ", label_style()),
+            Span::raw(groups.file_changes.len().to_string()),
+            Span::styled("  Web: ", label_style()),
+            Span::raw(groups.web_searches.len().to_string()),
+            Span::styled("  Failures: ", label_style()),
+            Span::raw(groups.failure_count.to_string()),
+        ]),
+        Line::from(""),
+    ];
+
+    if detail.tool_events.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No tool events found for this session",
+            secondary_style(),
+        )));
+        return lines;
+    }
+
+    append_tool_section(&mut lines, "Commands", &groups.commands);
+    append_tool_section(&mut lines, "File Changes", &groups.file_changes);
+    append_tool_section(&mut lines, "Web Searches", &groups.web_searches);
+    append_tool_section(&mut lines, "Other Events", &groups.other_events);
+
+    lines
+}
+
+fn skill_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
+    let groups = group_skill_evidence(&detail.skill_evidence);
+    let high_confidence_count = groups
+        .iter()
+        .filter(|group| group.highest_confidence == "high")
+        .count();
+    let medium_confidence_count = groups
+        .iter()
+        .filter(|group| group.highest_confidence == "medium")
+        .count();
+    let mut lines = vec![
+        section_label("Skill Summary"),
+        Line::from(vec![
+            Span::styled("Skills: ", label_style()),
+            Span::raw(groups.len().to_string()),
+            Span::styled("  Evidence: ", label_style()),
+            Span::raw(detail.skill_evidence.len().to_string()),
+            Span::styled("  High: ", label_style()),
+            Span::raw(high_confidence_count.to_string()),
+            Span::styled("  Medium: ", label_style()),
+            Span::raw(medium_confidence_count.to_string()),
+        ]),
+        Line::from(""),
+    ];
+
+    if detail.skill_evidence.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No skill usage evidence found for this session",
+            secondary_style(),
+        )));
+        return lines;
+    }
+
+    lines.push(section_label("Detected Skills"));
+    for group in groups {
         lines.push(Line::from(vec![
-            Span::styled(format!("{} ", message.role), role_style(&message.role)),
+            Span::styled(group.skill_name, label_style()),
+            Span::raw("  "),
+            Span::styled(
+                group.highest_confidence.clone(),
+                confidence_style(&group.highest_confidence),
+            ),
+        ]));
+        for evidence in group.evidence {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(evidence.evidence_type.clone(), secondary_style()),
+                Span::raw("  "),
+                Span::raw(compact_timestamp(&evidence.timestamp)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines
+}
+
+fn append_tool_section(
+    lines: &mut Vec<Line<'static>>,
+    label: &'static str,
+    events: &[&crate::codex::ParsedToolEvent],
+) {
+    if events.is_empty() {
+        return;
+    }
+
+    lines.push(section_label(label));
+    for event in events {
+        lines.push(Line::from(vec![
+            Span::styled(compact_timestamp(&event.timestamp), secondary_style()),
+            Span::raw("  "),
+            Span::styled(event.name.clone(), label_style()),
+        ]));
+        if !event.summary.trim().is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::raw(preview_text(&event.summary)),
+            ]));
+        }
+        if let Some(status) = &event.status {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("status: {status}"), secondary_style()),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+}
+
+fn append_messages(lines: &mut Vec<Line<'static>>, messages: &[&crate::codex::ParsedMessage]) {
+    for message in messages {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<9}", message.role), role_style(&message.role)),
             Span::raw(preview_text(&message.text)),
         ]));
     }
+}
 
+fn message_or_empty(message: Option<&str>) -> Line<'static> {
+    match message {
+        Some(message) => Line::from(Span::raw(preview_text(message))),
+        None => Line::from(Span::styled("No message found", secondary_style())),
+    }
+}
+
+fn latest_user_message(detail: &SessionDetail) -> Option<&str> {
+    detail
+        .summary
+        .latest_user_message
+        .as_deref()
+        .or_else(|| latest_message_by_role(&detail.messages, "user"))
+}
+
+fn latest_assistant_message(detail: &SessionDetail) -> Option<&str> {
+    detail
+        .summary
+        .latest_assistant_message
+        .as_deref()
+        .or_else(|| latest_message_by_role(&detail.messages, "assistant"))
+}
+
+fn latest_message_by_role<'a>(
+    messages: &'a [crate::codex::ParsedMessage],
+    role: &str,
+) -> Option<&'a str> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == role)
+        .map(|message| message.text.as_str())
+}
+
+fn add_action_lines(lines: &mut Vec<Line<'static>>, detail: &SessionDetail) {
     lines.extend([
         Line::from(""),
-        section_label("Resume"),
+        section_label("Action"),
         Line::from(vec![
             Span::styled("Session: ", label_style()),
             Span::raw(short_session_id(&detail.summary.session_id)),
             Span::styled("  |  Enter to resume", Style::default().fg(Color::Cyan)),
         ]),
     ]);
-
-    lines
 }
 
 fn section_label(label: &'static str) -> Line<'static> {
     Line::from(Span::styled(
-        label,
+        label.to_ascii_uppercase(),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -275,6 +480,16 @@ fn role_style(role: &str) -> Style {
         Color::Yellow
     } else {
         Color::Green
+    };
+
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn confidence_style(confidence: &str) -> Style {
+    let color = match confidence {
+        "high" => Color::Green,
+        "medium" => Color::Yellow,
+        _ => Color::DarkGray,
     };
 
     Style::default().fg(color).add_modifier(Modifier::BOLD)

@@ -31,6 +31,41 @@ fn stores_lists_searches_and_shows_sessions() {
 }
 
 #[test]
+fn stores_overview_activity_tool_events_and_skill_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("index.sqlite");
+    let database = db::Database::open(&db_path).unwrap();
+    let parsed =
+        codex::parse_session_file(Path::new("tests/fixtures/session-overview-ui.jsonl")).unwrap();
+
+    database.upsert_session(&parsed).unwrap();
+
+    let listed = database.list_sessions(10).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].last_activity_at, "2026-07-02T09:06:04Z");
+    assert_eq!(
+        listed[0].latest_user_message.as_deref(),
+        Some("now audit how skills are used")
+    );
+
+    let shown = database.get_session(&parsed.session_id).unwrap().unwrap();
+    assert_eq!(shown.messages.len(), 11);
+    assert_eq!(shown.tool_events.len(), 3);
+    assert_eq!(shown.tool_events[0].name, "exec_command");
+    assert_eq!(shown.skill_evidence.len(), 2);
+    assert_eq!(
+        shown.skill_evidence[0].skill_name,
+        "superpowers:brainstorming"
+    );
+
+    let skill_matches = database
+        .search_sessions("superpowers:brainstorming", 10)
+        .unwrap();
+    assert_eq!(skill_matches.len(), 1);
+    assert_eq!(skill_matches[0].session_id, parsed.session_id);
+}
+
+#[test]
 fn upsert_replaces_existing_source_path_and_cleans_stale_fts() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("index.sqlite");
