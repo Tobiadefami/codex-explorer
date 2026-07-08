@@ -1,15 +1,14 @@
 use std::{
-    collections::HashSet,
     fs::File,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedSession {
     pub session_id: String,
     pub started_at: String,
@@ -24,9 +23,9 @@ pub struct ParsedSession {
     pub last_activity_at: String,
     pub latest_user_message: Option<String>,
     pub latest_assistant_message: Option<String>,
+    pub items: Vec<ParsedSessionItem>,
     pub messages: Vec<ParsedMessage>,
     pub tool_events: Vec<ParsedToolEvent>,
-    pub skill_evidence: Vec<ParsedSkillEvidence>,
     pub searchable_text: String,
     pub malformed_records: usize,
 }
@@ -37,29 +36,53 @@ impl ParsedSession {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedMessage {
     pub timestamp: String,
     pub role: String,
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParsedSessionItem {
+    pub timestamp: String,
+    pub kind: ParsedSessionItemKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ParsedSessionItemKind {
+    SessionMeta(ParsedSessionMeta),
+    Message(ParsedMessage),
+    ToolEvent(ParsedToolEvent),
+    Unknown {
+        record_type: String,
+        payload_type: Option<String>,
+        payload: Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParsedSessionMeta {
+    pub session_id: Option<String>,
+    pub started_at: Option<String>,
+    pub cwd: Option<String>,
+    pub cli_version: Option<String>,
+    pub model_provider: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub thread_source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedToolEvent {
     pub timestamp: String,
     pub kind: String,
     pub name: String,
     pub summary: String,
     pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedSkillEvidence {
-    pub timestamp: String,
-    pub skill_name: String,
-    pub evidence_type: String,
-    pub confidence: String,
-    pub detail: String,
+    pub call_id: Option<String>,
+    pub exit_code: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +106,30 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
         .unwrap_or(0);
 
     let reader = BufReader::new(file);
+    let mut items = Vec::new();
+    let mut malformed_records = 0usize;
+
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("read line from {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<JsonlRecord>(&line) {
+            Ok(record) => items.push(parse_session_item(record)),
+            Err(_) => malformed_records += 1,
+        }
+    }
+
+    derive_session_from_items(path, modified_unix_seconds, items, malformed_records)
+}
+
+fn derive_session_from_items(
+    path: &Path,
+    modified_unix_seconds: i64,
+    items: Vec<ParsedSessionItem>,
+    malformed_records: usize,
+) -> Result<ParsedSession> {
     let mut session_id = None;
     let mut started_at = None;
     let mut cwd = None;
@@ -92,91 +139,39 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
     let mut thread_source = None;
     let mut messages = Vec::new();
     let mut tool_events = Vec::new();
-    let mut skill_evidence = Vec::new();
-    let mut seen_skill_evidence = HashSet::new();
     let mut last_activity_at = String::new();
     let mut latest_user_message = None;
     let mut latest_assistant_message = None;
-    let mut malformed_records = 0usize;
 
-    for line in reader.lines() {
-        let line = line.with_context(|| format!("read line from {}", path.display()))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let record = match serde_json::from_str::<JsonlRecord>(&line) {
-            Ok(record) => record,
-            Err(_) => {
-                malformed_records += 1;
-                continue;
+    for item in &items {
+        match &item.kind {
+            ParsedSessionItemKind::SessionMeta(meta) => {
+                session_id = meta.session_id.clone();
+                started_at = meta.started_at.clone();
+                cwd = meta.cwd.clone();
+                cli_version = meta.cli_version.clone();
+                model_provider = meta.model_provider.clone();
+                parent_thread_id = meta.parent_thread_id.clone();
+                thread_source = meta.thread_source.clone();
             }
-        };
-
-        if record.record_type == "session_meta" {
-            session_id = string_field(&record.payload, "id")
-                .or_else(|| string_field(&record.payload, "session_id"));
-            started_at = string_field(&record.payload, "timestamp").or(record.timestamp.clone());
-            cwd = string_field(&record.payload, "cwd");
-            cli_version = string_field(&record.payload, "cli_version");
-            model_provider = string_field(&record.payload, "model_provider");
-            parent_thread_id = string_field(&record.payload, "parent_thread_id");
-            thread_source = string_field(&record.payload, "thread_source");
-            continue;
-        }
-
-        if record.record_type == "response_item" {
-            if let Some(tool_event) = parse_tool_event(
-                record.timestamp.as_deref().unwrap_or_default(),
-                &record.payload,
-            ) {
-                if tool_event.name == "exec_command" {
-                    for evidence in skill_file_read_evidence(&tool_event) {
-                        push_unique_skill_evidence(
-                            &mut skill_evidence,
-                            &mut seen_skill_evidence,
-                            evidence,
-                        );
-                    }
-                }
+            ParsedSessionItemKind::ToolEvent(tool_event) => {
                 update_last_activity(&mut last_activity_at, &tool_event.timestamp);
-                tool_events.push(tool_event);
+                tool_events.push(tool_event.clone());
             }
-
-            if let Some(message) = parse_message(
-                record.timestamp.as_deref().unwrap_or_default(),
-                &record.payload,
-            ) {
+            ParsedSessionItemKind::Message(message) => {
                 update_last_activity(&mut last_activity_at, &message.timestamp);
                 if is_meaningful_text(&message.text) {
                     match message.role.as_str() {
                         "user" => latest_user_message = Some(preview_message_text(&message.text)),
                         "assistant" => {
                             latest_assistant_message = Some(preview_message_text(&message.text));
-                            for evidence in assistant_skill_announcements(&message) {
-                                push_unique_skill_evidence(
-                                    &mut skill_evidence,
-                                    &mut seen_skill_evidence,
-                                    evidence,
-                                );
-                            }
                         }
                         _ => {}
                     }
                 }
-                messages.push(message);
+                messages.push(message.clone());
             }
-            continue;
-        }
-
-        if record.record_type == "event_msg" {
-            if let Some(tool_event) = parse_event_message(
-                record.timestamp.as_deref().unwrap_or_default(),
-                &record.payload,
-            ) {
-                update_last_activity(&mut last_activity_at, &tool_event.timestamp);
-                tool_events.push(tool_event);
-            }
+            ParsedSessionItemKind::Unknown { .. } => {}
         }
     }
 
@@ -196,11 +191,6 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
             tool_events
                 .iter()
                 .filter_map(searchable_text_from_tool_event),
-        )
-        .chain(
-            skill_evidence
-                .iter()
-                .map(searchable_text_from_skill_evidence),
         )
         .collect::<Vec<_>>()
         .join("\n");
@@ -222,12 +212,59 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
         last_activity_at,
         latest_user_message,
         latest_assistant_message,
+        items,
         messages,
         tool_events,
-        skill_evidence,
         searchable_text,
         malformed_records,
     })
+}
+
+fn parse_session_item(record: JsonlRecord) -> ParsedSessionItem {
+    let timestamp = record.timestamp.unwrap_or_default();
+    let kind = match record.record_type.as_str() {
+        "session_meta" => {
+            ParsedSessionItemKind::SessionMeta(parse_session_meta(&timestamp, &record.payload))
+        }
+        "response_item" => parse_tool_event(&timestamp, &record.payload)
+            .map(ParsedSessionItemKind::ToolEvent)
+            .or_else(|| {
+                parse_message(&timestamp, &record.payload).map(ParsedSessionItemKind::Message)
+            })
+            .unwrap_or_else(|| unknown_session_item(record.record_type, record.payload)),
+        "event_msg" => parse_event_message(&timestamp, &record.payload)
+            .map(ParsedSessionItemKind::ToolEvent)
+            .unwrap_or_else(|| unknown_session_item(record.record_type, record.payload)),
+        _ => unknown_session_item(record.record_type, record.payload),
+    };
+
+    ParsedSessionItem { timestamp, kind }
+}
+
+fn parse_session_meta(timestamp: &str, payload: &Value) -> ParsedSessionMeta {
+    ParsedSessionMeta {
+        session_id: string_field(payload, "id").or_else(|| string_field(payload, "session_id")),
+        started_at: string_field(payload, "timestamp").or_else(|| {
+            if timestamp.is_empty() {
+                None
+            } else {
+                Some(timestamp.to_string())
+            }
+        }),
+        cwd: string_field(payload, "cwd"),
+        cli_version: string_field(payload, "cli_version"),
+        model_provider: string_field(payload, "model_provider"),
+        parent_thread_id: string_field(payload, "parent_thread_id"),
+        thread_source: string_field(payload, "thread_source"),
+    }
+}
+
+fn unknown_session_item(record_type: String, payload: Value) -> ParsedSessionItemKind {
+    ParsedSessionItemKind::Unknown {
+        payload_type: string_field(&payload, "type"),
+        record_type,
+        payload,
+    }
 }
 
 fn parse_message(timestamp: &str, payload: &Value) -> Option<ParsedMessage> {
@@ -272,7 +309,17 @@ fn parse_tool_event(timestamp: &str, payload: &Value) -> Option<ParsedToolEvent>
             kind: "function_call_output".to_string(),
             name: "function_call_output".to_string(),
             summary: string_field(payload, "output").unwrap_or_default(),
-            status: None,
+            status: command_status_from_exit_code(
+                string_field(payload, "output")
+                    .as_deref()
+                    .and_then(exit_code_from_command_output),
+            ),
+            call_id: string_field(payload, "call_id"),
+            exit_code: string_field(payload, "output")
+                .as_deref()
+                .and_then(exit_code_from_command_output),
+            duration_ms: None,
+            cwd: None,
         }),
         "custom_tool_call" => Some(ParsedToolEvent {
             timestamp: timestamp.to_string(),
@@ -280,13 +327,22 @@ fn parse_tool_event(timestamp: &str, payload: &Value) -> Option<ParsedToolEvent>
             name: string_field(payload, "name").unwrap_or_else(|| "custom_tool_call".to_string()),
             summary: payload.get("input").map(value_summary).unwrap_or_default(),
             status: string_field(payload, "status"),
+            call_id: string_field(payload, "call_id"),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
         }),
         "custom_tool_call_output" => Some(ParsedToolEvent {
             timestamp: timestamp.to_string(),
             kind: "custom_tool_call_output".to_string(),
-            name: "custom_tool_call_output".to_string(),
+            name: string_field(payload, "name")
+                .unwrap_or_else(|| "custom_tool_call_output".to_string()),
             summary: string_field(payload, "output").unwrap_or_default(),
             status: None,
+            call_id: string_field(payload, "call_id"),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
         }),
         "web_search_call" => Some(ParsedToolEvent {
             timestamp: timestamp.to_string(),
@@ -297,6 +353,10 @@ fn parse_tool_event(timestamp: &str, payload: &Value) -> Option<ParsedToolEvent>
                 .map(Value::to_string)
                 .unwrap_or_default(),
             status: string_field(payload, "status"),
+            call_id: string_field(payload, "call_id"),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
         }),
         _ => None,
     }
@@ -318,6 +378,10 @@ fn parse_function_call(timestamp: &str, payload: &Value) -> Option<ParsedToolEve
         name,
         summary,
         status: None,
+        call_id: string_field(payload, "call_id"),
+        exit_code: None,
+        duration_ms: None,
+        cwd: None,
     })
 }
 
@@ -331,6 +395,51 @@ fn parse_event_message(timestamp: &str, payload: &Value) -> Option<ParsedToolEve
             name: "task_complete".to_string(),
             summary: string_field(payload, "last_agent_message").unwrap_or_default(),
             status: Some("completed".to_string()),
+            call_id: None,
+            exit_code: None,
+            duration_ms: i64_field(payload, "duration_ms"),
+            cwd: None,
+        }),
+        "turn_aborted" => Some(ParsedToolEvent {
+            timestamp: string_field(payload, "completed_at")
+                .unwrap_or_else(|| timestamp.to_string()),
+            kind: "turn_aborted".to_string(),
+            name: "turn_aborted".to_string(),
+            summary: string_field(payload, "reason").unwrap_or_default(),
+            status: Some("aborted".to_string()),
+            call_id: None,
+            exit_code: None,
+            duration_ms: i64_field(payload, "duration_ms"),
+            cwd: None,
+        }),
+        "exec_command_end" => {
+            let exit_code = i64_field(payload, "exit_code");
+            Some(ParsedToolEvent {
+                timestamp: timestamp.to_string(),
+                kind: "exec_command_end".to_string(),
+                name: "exec_command".to_string(),
+                summary: command_summary(payload),
+                status: command_status_from_exit_code(exit_code)
+                    .or_else(|| string_field(payload, "status")),
+                call_id: string_field(payload, "call_id"),
+                exit_code,
+                duration_ms: duration_ms_from_payload(payload),
+                cwd: string_field(payload, "cwd"),
+            })
+        }
+        "mcp_tool_call_end" => Some(ParsedToolEvent {
+            timestamp: timestamp.to_string(),
+            kind: "mcp_tool_call_end".to_string(),
+            name: mcp_tool_name(payload),
+            summary: payload
+                .get("invocation")
+                .map(Value::to_string)
+                .unwrap_or_default(),
+            status: string_field(payload, "status"),
+            call_id: string_field(payload, "call_id"),
+            exit_code: None,
+            duration_ms: duration_ms_from_payload(payload),
+            cwd: None,
         }),
         "patch_apply_end" => Some(ParsedToolEvent {
             timestamp: timestamp.to_string(),
@@ -343,6 +452,10 @@ fn parse_event_message(timestamp: &str, payload: &Value) -> Option<ParsedToolEve
                     .and_then(Value::as_bool)
                     .map(|success| if success { "success" } else { "failed" }.to_string())
             }),
+            call_id: string_field(payload, "call_id"),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
         }),
         "web_search_end" => Some(ParsedToolEvent {
             timestamp: timestamp.to_string(),
@@ -352,6 +465,10 @@ fn parse_event_message(timestamp: &str, payload: &Value) -> Option<ParsedToolEve
                 .or_else(|| payload.get("action").map(Value::to_string))
                 .unwrap_or_default(),
             status: None,
+            call_id: string_field(payload, "call_id"),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
         }),
         _ => None,
     }
@@ -369,6 +486,53 @@ fn value_summary(value: &Value) -> String {
     }
 }
 
+fn command_summary(payload: &Value) -> String {
+    payload
+        .get("command")
+        .and_then(Value::as_array)
+        .and_then(|command| command.last())
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| string_field(payload, "aggregated_output"))
+        .unwrap_or_default()
+}
+
+fn mcp_tool_name(payload: &Value) -> String {
+    payload
+        .get("invocation")
+        .and_then(|invocation| string_field(invocation, "tool"))
+        .unwrap_or_else(|| "mcp_tool_call".to_string())
+}
+
+fn command_status_from_exit_code(exit_code: Option<i64>) -> Option<String> {
+    exit_code.map(|code| {
+        if code == 0 {
+            "completed".to_string()
+        } else {
+            "failed".to_string()
+        }
+    })
+}
+
+fn exit_code_from_command_output(output: &str) -> Option<i64> {
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Process exited with code ")
+            .and_then(|code| code.parse::<i64>().ok())
+    })
+}
+
+fn duration_ms_from_payload(payload: &Value) -> Option<i64> {
+    if let Some(duration_ms) = i64_field(payload, "duration_ms") {
+        return Some(duration_ms);
+    }
+
+    let duration = payload.get("duration")?;
+    let seconds = i64_field(duration, "secs")?;
+    let nanos = i64_field(duration, "nanos").unwrap_or(0);
+    Some(seconds.saturating_mul(1000) + nanos / 1_000_000)
+}
+
 fn patch_summary(payload: &Value) -> String {
     payload
         .get("changes")
@@ -377,52 +541,15 @@ fn patch_summary(payload: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn skill_file_read_evidence(tool_event: &ParsedToolEvent) -> Vec<ParsedSkillEvidence> {
-    skill_names_from_command(&tool_event.summary)
-        .into_iter()
-        .map(|skill_name| ParsedSkillEvidence {
-            timestamp: tool_event.timestamp.clone(),
-            skill_name,
-            evidence_type: "skill_file_read".to_string(),
-            confidence: "high".to_string(),
-            detail: tool_event.summary.clone(),
-        })
-        .collect()
-}
-
-fn assistant_skill_announcements(message: &ParsedMessage) -> Vec<ParsedSkillEvidence> {
-    announced_skill_names(&message.text)
-        .into_iter()
-        .map(|skill_name| ParsedSkillEvidence {
-            timestamp: message.timestamp.clone(),
-            skill_name,
-            evidence_type: "assistant_announcement".to_string(),
-            confidence: "medium".to_string(),
-            detail: preview_message_text(&message.text),
-        })
-        .collect()
-}
-
-fn push_unique_skill_evidence(
-    evidence: &mut Vec<ParsedSkillEvidence>,
-    seen: &mut HashSet<(String, String, String)>,
-    item: ParsedSkillEvidence,
-) {
-    let key = (
-        item.timestamp.clone(),
-        item.skill_name.clone(),
-        item.evidence_type.clone(),
-    );
-    if seen.insert(key) {
-        evidence.push(item);
-    }
-}
-
 fn string_field(value: &Value, field: &str) -> Option<String> {
     value
         .get(field)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+fn i64_field(value: &Value, field: &str) -> Option<i64> {
+    value.get(field).and_then(Value::as_i64)
 }
 
 fn update_last_activity(last_activity_at: &mut String, timestamp: &str) {
@@ -505,20 +632,6 @@ fn searchable_text_from_tool_event(event: &ParsedToolEvent) -> Option<String> {
     }
 }
 
-fn searchable_text_from_skill_evidence(evidence: &ParsedSkillEvidence) -> String {
-    [
-        evidence.skill_name.as_str(),
-        evidence.evidence_type.as_str(),
-        evidence.confidence.as_str(),
-        evidence.detail.as_str(),
-    ]
-    .into_iter()
-    .map(str::trim)
-    .filter(|part| !part.is_empty())
-    .collect::<Vec<_>>()
-    .join("\n")
-}
-
 fn is_meaningful_text(text: &str) -> bool {
     let text = text.trim_start();
     !text.is_empty() && !is_bootstrap_message(text)
@@ -542,75 +655,4 @@ fn is_bootstrap_message(text: &str) -> bool {
 
 fn is_noise_line(line: &str) -> bool {
     line.starts_with("<image ")
-}
-
-fn announced_skill_names(text: &str) -> Vec<String> {
-    let mut skill_names = Vec::new();
-    let mut remaining = text;
-
-    while let Some(start) = remaining.find("Using `") {
-        let after_start = &remaining[start + "Using `".len()..];
-        let Some(end) = after_start.find('`') else {
-            break;
-        };
-        let skill_name = &after_start[..end];
-        if looks_like_skill_name(skill_name) {
-            skill_names.push(skill_name.to_string());
-        }
-        remaining = &after_start[end + 1..];
-    }
-
-    skill_names
-}
-
-fn skill_names_from_command(command: &str) -> Vec<String> {
-    let mut skill_names = Vec::new();
-    let mut search_start = 0usize;
-
-    while let Some(relative_end) = command[search_start..].find("SKILL.md") {
-        let skill_file_end = search_start + relative_end + "SKILL.md".len();
-        let skill_file_start = command[..skill_file_end]
-            .rfind(|character: char| {
-                character.is_whitespace() || character == '\'' || character == '"'
-            })
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        let skill_path = &command[skill_file_start..skill_file_end];
-        if let Some(skill_name) = skill_name_from_path(skill_path) {
-            skill_names.push(skill_name);
-        }
-        search_start = skill_file_end;
-    }
-
-    skill_names.sort();
-    skill_names.dedup();
-    skill_names
-}
-
-fn skill_name_from_path(path: &str) -> Option<String> {
-    let normalized = path.trim_matches(|character| character == '\'' || character == '"');
-    if !normalized.ends_with("/SKILL.md") {
-        return None;
-    }
-
-    let skill_name = Path::new(normalized)
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())?;
-    if skill_name.is_empty() {
-        return None;
-    }
-
-    if normalized.contains("/.codex/superpowers/skills/") {
-        Some(format!("superpowers:{skill_name}"))
-    } else {
-        Some(skill_name.to_string())
-    }
-}
-
-fn looks_like_skill_name(skill_name: &str) -> bool {
-    !skill_name.is_empty()
-        && skill_name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':')
-        })
 }

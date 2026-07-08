@@ -15,7 +15,7 @@ pub enum PreviewMode {
     Overview,
     Conversation,
     Tools,
-    Skills,
+    Timeline,
 }
 
 pub struct TuiState {
@@ -108,7 +108,7 @@ impl TuiState {
             PreviewMode::Overview => "Overview",
             PreviewMode::Conversation => "Conversation",
             PreviewMode::Tools => "Tools",
-            PreviewMode::Skills => "Skills",
+            PreviewMode::Timeline => "Timeline",
         }
     }
 

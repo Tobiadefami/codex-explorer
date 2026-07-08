@@ -6,12 +6,15 @@ use ratatui::{
     Frame,
 };
 
-use crate::db::{SessionDetail, SessionSummary};
+use crate::{
+    codex::{ParsedSessionItem, ParsedSessionItemKind},
+    db::{SessionDetail, SessionSummary},
+};
 
 use super::{
     format::{
         compact_path, compact_timestamp, conversation_windows, empty_state_message,
-        group_skill_evidence, group_tool_events, preview_text, short_session_id,
+        group_tool_events, preview_text, short_session_id, visible_tool_events,
     },
     refresh::RefreshStatus,
     state::{PreviewMode, TuiState},
@@ -177,7 +180,7 @@ fn render_preview(
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type search | r reindex | 1 overview | 2 conversation | 3 tools | 4 skills | a all | p project | Enter resume | Esc quit",
+        "Type search | r reindex | 1 overview | 2 conversation | 3 tools | 4 timeline | a all | p project | Enter resume | Esc quit",
     )
     .style(secondary_style());
     frame.render_widget(help, area);
@@ -192,7 +195,7 @@ fn preview_lines(preview_mode: PreviewMode, detail: &SessionDetail) -> Vec<Line<
         PreviewMode::Overview => overview_lines(detail),
         PreviewMode::Conversation => conversation_lines(detail),
         PreviewMode::Tools => tool_lines(detail),
-        PreviewMode::Skills => skill_lines(detail),
+        PreviewMode::Timeline => timeline_lines(detail),
     }
 }
 
@@ -236,8 +239,8 @@ fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
             Span::raw(detail.messages.len().to_string()),
             Span::styled("  Tools: ", label_style()),
             Span::raw(detail.tool_events.len().to_string()),
-            Span::styled("  Skills: ", label_style()),
-            Span::raw(detail.skill_evidence.len().to_string()),
+            Span::styled("  Items: ", label_style()),
+            Span::raw(detail.items.len().to_string()),
         ]),
     ];
 
@@ -302,6 +305,7 @@ fn tool_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
         return lines;
     }
 
+    append_tool_section(&mut lines, "Failures", &groups.failures);
     append_tool_section(&mut lines, "Commands", &groups.commands);
     append_tool_section(&mut lines, "File Changes", &groups.file_changes);
     append_tool_section(&mut lines, "Web Searches", &groups.web_searches);
@@ -310,61 +314,80 @@ fn tool_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
     lines
 }
 
-fn skill_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
-    let groups = group_skill_evidence(&detail.skill_evidence);
-    let high_confidence_count = groups
-        .iter()
-        .filter(|group| group.highest_confidence == "high")
-        .count();
-    let medium_confidence_count = groups
-        .iter()
-        .filter(|group| group.highest_confidence == "medium")
-        .count();
-    let mut lines = vec![
-        section_label("Skill Summary"),
-        Line::from(vec![
-            Span::styled("Skills: ", label_style()),
-            Span::raw(groups.len().to_string()),
-            Span::styled("  Evidence: ", label_style()),
-            Span::raw(detail.skill_evidence.len().to_string()),
-            Span::styled("  High: ", label_style()),
-            Span::raw(high_confidence_count.to_string()),
-            Span::styled("  Medium: ", label_style()),
-            Span::raw(medium_confidence_count.to_string()),
-        ]),
-        Line::from(""),
-    ];
+fn timeline_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
+    let mut lines = vec![section_label("Session Timeline")];
 
-    if detail.skill_evidence.is_empty() {
+    if detail.items.is_empty() {
         lines.push(Line::from(Span::styled(
-            "No skill usage evidence found for this session",
+            "No session items found for this session",
             secondary_style(),
         )));
         return lines;
     }
 
-    lines.push(section_label("Detected Skills"));
-    for group in groups {
-        lines.push(Line::from(vec![
-            Span::styled(group.skill_name, label_style()),
-            Span::raw("  "),
-            Span::styled(
-                group.highest_confidence.clone(),
-                confidence_style(&group.highest_confidence),
-            ),
-        ]));
-        for evidence in group.evidence {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(evidence.evidence_type.clone(), secondary_style()),
-                Span::raw("  "),
-                Span::raw(compact_timestamp(&evidence.timestamp)),
-            ]));
-        }
-        lines.push(Line::from(""));
+    for item in &detail.items {
+        append_session_item(&mut lines, item);
     }
 
     lines
+}
+
+fn append_session_item(lines: &mut Vec<Line<'static>>, item: &ParsedSessionItem) {
+    match &item.kind {
+        ParsedSessionItemKind::SessionMeta(meta) => {
+            lines.push(Line::from(vec![
+                Span::styled(compact_timestamp(&item.timestamp), secondary_style()),
+                Span::raw("  "),
+                Span::styled("session_meta", label_style()),
+            ]));
+            if let Some(cwd) = &meta.cwd {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::raw(compact_path(cwd)),
+                ]));
+            }
+        }
+        ParsedSessionItemKind::Message(message) => {
+            lines.push(Line::from(vec![
+                Span::styled(compact_timestamp(&item.timestamp), secondary_style()),
+                Span::raw("  "),
+                Span::styled(message.role.clone(), role_style(&message.role)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::raw(preview_text(&message.text)),
+            ]));
+        }
+        ParsedSessionItemKind::ToolEvent(event) => {
+            lines.push(Line::from(vec![
+                Span::styled(compact_timestamp(&item.timestamp), secondary_style()),
+                Span::raw("  "),
+                Span::styled(event.name.clone(), label_style()),
+                Span::styled(format!("  {}", event.kind), secondary_style()),
+            ]));
+            if !event.summary.trim().is_empty() {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::raw(preview_text(&event.summary)),
+                ]));
+            }
+        }
+        ParsedSessionItemKind::Unknown {
+            record_type,
+            payload_type,
+            ..
+        } => {
+            let item_label = payload_type
+                .as_ref()
+                .map(|payload_type| format!("{record_type}/{payload_type}"))
+                .unwrap_or_else(|| record_type.clone());
+            lines.push(Line::from(vec![
+                Span::styled(compact_timestamp(&item.timestamp), secondary_style()),
+                Span::raw("  "),
+                Span::styled(item_label, secondary_style()),
+            ]));
+        }
+    }
 }
 
 fn append_tool_section(
@@ -377,7 +400,8 @@ fn append_tool_section(
     }
 
     lines.push(section_label(label));
-    for event in events {
+    let visible = visible_tool_events(events);
+    for event in visible.events {
         lines.push(Line::from(vec![
             Span::styled(compact_timestamp(&event.timestamp), secondary_style()),
             Span::raw("  "),
@@ -395,8 +419,47 @@ fn append_tool_section(
                 Span::styled(format!("status: {status}"), secondary_style()),
             ]));
         }
+        let metadata = tool_event_metadata(event);
+        if !metadata.is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(metadata, secondary_style()),
+            ]));
+        }
+    }
+    if visible.omitted_count > 0 {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                format!("{} more not shown", visible.omitted_count),
+                secondary_style(),
+            ),
+        ]));
     }
     lines.push(Line::from(""));
+}
+
+fn tool_event_metadata(event: &crate::codex::ParsedToolEvent) -> String {
+    let mut parts = Vec::new();
+    if let Some(exit_code) = event.exit_code {
+        parts.push(format!("exit: {exit_code}"));
+    }
+    if let Some(duration_ms) = event.duration_ms {
+        parts.push(format!("duration: {}", compact_duration(duration_ms)));
+    }
+    if let Some(cwd) = &event.cwd {
+        parts.push(format!("cwd: {}", compact_path(cwd)));
+    }
+    parts.join("  ")
+}
+
+fn compact_duration(duration_ms: i64) -> String {
+    if duration_ms < 1000 {
+        return format!("{duration_ms}ms");
+    }
+
+    let seconds = duration_ms as f64 / 1000.0;
+    format!("{seconds:.1}s")
 }
 
 fn append_messages(lines: &mut Vec<Line<'static>>, messages: &[&crate::codex::ParsedMessage]) {
@@ -480,16 +543,6 @@ fn role_style(role: &str) -> Style {
         Color::Yellow
     } else {
         Color::Green
-    };
-
-    Style::default().fg(color).add_modifier(Modifier::BOLD)
-}
-
-fn confidence_style(confidence: &str) -> Style {
-    let color = match confidence {
-        "high" => Color::Green,
-        "medium" => Color::Yellow,
-        _ => Color::DarkGray,
     };
 
     Style::default().fg(color).add_modifier(Modifier::BOLD)

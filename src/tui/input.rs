@@ -75,7 +75,7 @@ pub(super) fn handle_key(
             Ok(TuiAction::Continue)
         }
         KeyCode::Char('4') if state.query().is_empty() => {
-            state.set_preview_mode(PreviewMode::Skills);
+            state.set_preview_mode(PreviewMode::Timeline);
             Ok(TuiAction::Continue)
         }
         KeyCode::Char('d') if state.query().is_empty() => {
@@ -123,5 +123,22 @@ mod tests {
 
         assert!(matches!(action, TuiAction::Refresh));
         assert_eq!(state.query(), "");
+    }
+
+    #[test]
+    fn number_keys_switch_preview_modes() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        let action = handle_key(
+            &database,
+            &mut state,
+            KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE),
+        )
+        .unwrap();
+
+        assert!(matches!(action, TuiAction::Continue));
+        assert_eq!(state.preview_mode(), PreviewMode::Timeline);
     }
 }
