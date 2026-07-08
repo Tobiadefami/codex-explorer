@@ -3,7 +3,7 @@ use std::{collections::HashSet, path::Path};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
-use crate::codex::{ParsedMessage, ParsedSession, ParsedSkillEvidence, ParsedToolEvent};
+use crate::codex::{ParsedMessage, ParsedSession, ParsedSessionItem, ParsedToolEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
@@ -17,12 +17,12 @@ pub struct SessionSummary {
     pub source_path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionDetail {
     pub summary: SessionSummary,
+    pub items: Vec<ParsedSessionItem>,
     pub messages: Vec<ParsedMessage>,
     pub tool_events: Vec<ParsedToolEvent>,
-    pub skill_evidence: Vec<ParsedSkillEvidence>,
 }
 
 pub struct Database {
@@ -47,6 +47,8 @@ impl Database {
         self.conn.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
+
+            DROP TABLE IF EXISTS skill_evidence;
 
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -73,6 +75,15 @@ impl Database {
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS session_items (
+                session_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                item_json TEXT NOT NULL,
+                PRIMARY KEY (session_id, position),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(
                 session_id UNINDEXED,
                 title,
@@ -88,26 +99,23 @@ impl Database {
                 name TEXT NOT NULL,
                 summary TEXT NOT NULL,
                 status TEXT,
+                call_id TEXT,
+                exit_code INTEGER,
+                duration_ms INTEGER,
+                cwd TEXT,
                 PRIMARY KEY (session_id, position),
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS skill_evidence (
-                session_id TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                timestamp TEXT NOT NULL,
-                skill_name TEXT NOT NULL,
-                evidence_type TEXT NOT NULL,
-                confidence TEXT NOT NULL,
-                detail TEXT NOT NULL,
-                PRIMARY KEY (session_id, position),
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-            );
             "#,
         )?;
         self.add_column_if_missing("sessions", "last_activity_at", "TEXT NOT NULL DEFAULT ''")?;
         self.add_column_if_missing("sessions", "latest_user_message", "TEXT")?;
         self.add_column_if_missing("sessions", "latest_assistant_message", "TEXT")?;
+        self.add_column_if_missing("tool_events", "call_id", "TEXT")?;
+        self.add_column_if_missing("tool_events", "exit_code", "INTEGER")?;
+        self.add_column_if_missing("tool_events", "duration_ms", "INTEGER")?;
+        self.add_column_if_missing("tool_events", "cwd", "TEXT")?;
         Ok(())
     }
 
@@ -147,15 +155,15 @@ impl Database {
 
         for existing_session_id in &existing_session_ids {
             tx.execute(
+                "DELETE FROM session_items WHERE session_id = ?1",
+                params![existing_session_id],
+            )?;
+            tx.execute(
                 "DELETE FROM messages WHERE session_id = ?1",
                 params![existing_session_id],
             )?;
             tx.execute(
                 "DELETE FROM tool_events WHERE session_id = ?1",
-                params![existing_session_id],
-            )?;
-            tx.execute(
-                "DELETE FROM skill_evidence WHERE session_id = ?1",
                 params![existing_session_id],
             )?;
             tx.execute(
@@ -205,6 +213,22 @@ impl Database {
             ],
         )?;
 
+        for (position, item) in session.items.iter().enumerate() {
+            let item_json = serde_json::to_string(item)?;
+            tx.execute(
+                r#"
+                INSERT INTO session_items (session_id, position, timestamp, item_json)
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![
+                    session.session_id,
+                    position as i64,
+                    item.timestamp,
+                    item_json
+                ],
+            )?;
+        }
+
         for (position, message) in session.messages.iter().enumerate() {
             tx.execute(
                 r#"
@@ -225,9 +249,10 @@ impl Database {
             tx.execute(
                 r#"
                 INSERT INTO tool_events (
-                    session_id, position, timestamp, kind, name, summary, status
+                    session_id, position, timestamp, kind, name, summary, status,
+                    call_id, exit_code, duration_ms, cwd
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 "#,
                 params![
                     session.session_id,
@@ -237,27 +262,10 @@ impl Database {
                     event.name,
                     event.summary,
                     event.status,
-                ],
-            )?;
-        }
-
-        for (position, evidence) in session.skill_evidence.iter().enumerate() {
-            tx.execute(
-                r#"
-                INSERT INTO skill_evidence (
-                    session_id, position, timestamp, skill_name,
-                    evidence_type, confidence, detail
-                )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                "#,
-                params![
-                    session.session_id,
-                    position as i64,
-                    evidence.timestamp,
-                    evidence.skill_name,
-                    evidence.evidence_type,
-                    evidence.confidence,
-                    evidence.detail,
+                    event.call_id,
+                    event.exit_code,
+                    event.duration_ms,
+                    event.cwd,
                 ],
             )?;
         }
@@ -375,6 +383,22 @@ impl Database {
 
         let mut statement = self.conn.prepare(
             r#"
+            SELECT item_json
+            FROM session_items
+            WHERE session_id = ?1
+            ORDER BY position ASC
+            "#,
+        )?;
+        let item_json = statement
+            .query_map(params![session_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let items = item_json
+            .into_iter()
+            .map(|item_json| serde_json::from_str::<ParsedSessionItem>(&item_json))
+            .collect::<serde_json::Result<Vec<_>>>()?;
+
+        let mut statement = self.conn.prepare(
+            r#"
             SELECT timestamp, role, text
             FROM messages
             WHERE session_id = ?1
@@ -393,7 +417,7 @@ impl Database {
 
         let mut statement = self.conn.prepare(
             r#"
-            SELECT timestamp, kind, name, summary, status
+            SELECT timestamp, kind, name, summary, status, call_id, exit_code, duration_ms, cwd
             FROM tool_events
             WHERE session_id = ?1
             ORDER BY position ASC
@@ -407,35 +431,19 @@ impl Database {
                     name: row.get(2)?,
                     summary: row.get(3)?,
                     status: row.get(4)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        let mut statement = self.conn.prepare(
-            r#"
-            SELECT timestamp, skill_name, evidence_type, confidence, detail
-            FROM skill_evidence
-            WHERE session_id = ?1
-            ORDER BY position ASC
-            "#,
-        )?;
-        let skill_evidence = statement
-            .query_map(params![session_id], |row| {
-                Ok(ParsedSkillEvidence {
-                    timestamp: row.get(0)?,
-                    skill_name: row.get(1)?,
-                    evidence_type: row.get(2)?,
-                    confidence: row.get(3)?,
-                    detail: row.get(4)?,
+                    call_id: row.get(5)?,
+                    exit_code: row.get(6)?,
+                    duration_ms: row.get(7)?,
+                    cwd: row.get(8)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(Some(SessionDetail {
             summary,
+            items,
             messages,
             tool_events,
-            skill_evidence,
         }))
     }
 

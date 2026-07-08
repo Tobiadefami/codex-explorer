@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
-use crate::codex::{ParsedMessage, ParsedSkillEvidence, ParsedToolEvent};
+use crate::codex::{ParsedMessage, ParsedToolEvent};
 
 use super::refresh::RefreshStatus;
 
@@ -14,15 +14,17 @@ pub struct ToolEventGroups<'a> {
     pub commands: Vec<&'a ParsedToolEvent>,
     pub file_changes: Vec<&'a ParsedToolEvent>,
     pub web_searches: Vec<&'a ParsedToolEvent>,
+    pub failures: Vec<&'a ParsedToolEvent>,
     pub other_events: Vec<&'a ParsedToolEvent>,
     pub failure_count: usize,
 }
 
-pub struct SkillEvidenceGroup<'a> {
-    pub skill_name: String,
-    pub highest_confidence: String,
-    pub evidence: Vec<&'a ParsedSkillEvidence>,
+pub struct VisibleToolEvents<'a> {
+    pub events: Vec<&'a ParsedToolEvent>,
+    pub omitted_count: usize,
 }
+
+pub const TOOL_SECTION_ITEM_LIMIT: usize = 5;
 
 pub fn short_session_id(session_id: &str) -> String {
     if session_id.len() <= 16 {
@@ -112,17 +114,29 @@ pub fn conversation_windows(
 }
 
 pub fn group_tool_events(events: &[ParsedToolEvent]) -> ToolEventGroups<'_> {
+    let completed_command_call_ids = events
+        .iter()
+        .filter(|event| event.kind == "exec_command_end")
+        .filter_map(|event| event.call_id.as_deref())
+        .collect::<HashSet<_>>();
+    let mut failure_keys = HashSet::new();
     let mut groups = ToolEventGroups {
         commands: Vec::new(),
         file_changes: Vec::new(),
         web_searches: Vec::new(),
+        failures: Vec::new(),
         other_events: Vec::new(),
         failure_count: 0,
     };
 
     for event in events {
-        if is_failure(event) {
+        if is_failure(event) && failure_keys.insert(tool_event_key(event)) {
+            groups.failures.push(event);
             groups.failure_count += 1;
+        }
+
+        if is_superseded_command_start(event, &completed_command_call_ids) {
+            continue;
         }
 
         if event.name == "exec_command" {
@@ -139,29 +153,15 @@ pub fn group_tool_events(events: &[ParsedToolEvent]) -> ToolEventGroups<'_> {
     groups
 }
 
-pub fn group_skill_evidence(evidence: &[ParsedSkillEvidence]) -> Vec<SkillEvidenceGroup<'_>> {
-    let mut groups: Vec<SkillEvidenceGroup<'_>> = Vec::new();
-
-    for item in evidence {
-        match groups
-            .iter_mut()
-            .find(|group| group.skill_name == item.skill_name)
-        {
-            Some(group) => {
-                if confidence_rank(&item.confidence) > confidence_rank(&group.highest_confidence) {
-                    group.highest_confidence = item.confidence.clone();
-                }
-                group.evidence.push(item);
-            }
-            None => groups.push(SkillEvidenceGroup {
-                skill_name: item.skill_name.clone(),
-                highest_confidence: item.confidence.clone(),
-                evidence: vec![item],
-            }),
-        }
+pub fn visible_tool_events<'a>(events: &[&'a ParsedToolEvent]) -> VisibleToolEvents<'a> {
+    VisibleToolEvents {
+        events: events
+            .iter()
+            .take(TOOL_SECTION_ITEM_LIMIT)
+            .copied()
+            .collect(),
+        omitted_count: events.len().saturating_sub(TOOL_SECTION_ITEM_LIMIT),
     }
-
-    groups
 }
 
 pub(super) fn preview_text(text: &str) -> String {
@@ -216,18 +216,30 @@ fn is_failure(event: &ParsedToolEvent) -> bool {
         .unwrap_or(false)
 }
 
+fn is_superseded_command_start(
+    event: &ParsedToolEvent,
+    completed_call_ids: &HashSet<&str>,
+) -> bool {
+    event.kind == "function_call"
+        && event.name == "exec_command"
+        && event
+            .call_id
+            .as_deref()
+            .is_some_and(|call_id| completed_call_ids.contains(call_id))
+}
+
+fn tool_event_key(event: &ParsedToolEvent) -> String {
+    event.call_id.as_ref().cloned().unwrap_or_else(|| {
+        format!(
+            "{}:{}:{}:{}",
+            event.timestamp, event.kind, event.name, event.summary
+        )
+    })
+}
+
 fn is_low_signal_tool_event(event: &ParsedToolEvent) -> bool {
     matches!(
         event.kind.as_str(),
         "function_call_output" | "custom_tool_call_output" | "task_complete"
     )
-}
-
-fn confidence_rank(confidence: &str) -> u8 {
-    match confidence {
-        "high" => 3,
-        "medium" => 2,
-        "low" => 1,
-        _ => 0,
-    }
 }

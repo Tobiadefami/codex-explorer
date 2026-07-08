@@ -12,7 +12,7 @@ mod tui;
 use db::Database;
 use tui::format::{
     compact_path, compact_timestamp, conversation_windows, empty_results_message,
-    empty_state_message, group_skill_evidence, group_tool_events, short_session_id,
+    empty_state_message, group_tool_events, short_session_id, visible_tool_events,
 };
 use tui::refresh::RefreshStatus;
 use tui::state::{PreviewMode, ProjectScope, TuiState};
@@ -159,8 +159,9 @@ fn state_tracks_preview_modes() {
     assert_eq!(state.preview_mode(), PreviewMode::Tools);
     assert_eq!(state.preview_scroll(), 0);
 
-    state.set_preview_mode(PreviewMode::Skills);
-    assert_eq!(state.preview_mode(), PreviewMode::Skills);
+    state.set_preview_mode(PreviewMode::Timeline);
+    assert_eq!(state.preview_mode(), PreviewMode::Timeline);
+    assert_eq!(state.preview_mode_label(), "Timeline");
 }
 
 #[test]
@@ -251,6 +252,21 @@ fn tool_event_groups_collect_scannable_categories() {
             name: "exec_command".to_string(),
             summary: "cargo test".to_string(),
             status: None,
+            call_id: Some("call_cargo".to_string()),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
+        },
+        codex::ParsedToolEvent {
+            timestamp: "2026-07-01T10:00:01Z".to_string(),
+            kind: "exec_command_end".to_string(),
+            name: "exec_command".to_string(),
+            summary: "cargo test".to_string(),
+            status: Some("failed".to_string()),
+            call_id: Some("call_cargo".to_string()),
+            exit_code: Some(101),
+            duration_ms: Some(1200),
+            cwd: Some("/work/project-a".to_string()),
         },
         codex::ParsedToolEvent {
             timestamp: "2026-07-01T10:01:00Z".to_string(),
@@ -258,6 +274,10 @@ fn tool_event_groups_collect_scannable_categories() {
             name: "apply_patch".to_string(),
             summary: "src/tui/render.rs".to_string(),
             status: Some("completed".to_string()),
+            call_id: Some("call_patch".to_string()),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
         },
         codex::ParsedToolEvent {
             timestamp: "2026-07-01T10:02:00Z".to_string(),
@@ -265,6 +285,10 @@ fn tool_event_groups_collect_scannable_categories() {
             name: "web_search".to_string(),
             summary: "Codex hooks".to_string(),
             status: None,
+            call_id: Some("call_web".to_string()),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
         },
         codex::ParsedToolEvent {
             timestamp: "2026-07-01T10:03:00Z".to_string(),
@@ -272,51 +296,44 @@ fn tool_event_groups_collect_scannable_categories() {
             name: "function_call_output".to_string(),
             summary: "test failed".to_string(),
             status: Some("failed".to_string()),
+            call_id: Some("call_output".to_string()),
+            exit_code: Some(2),
+            duration_ms: None,
+            cwd: None,
         },
     ];
 
     let groups = group_tool_events(&events);
 
     assert_eq!(groups.commands.len(), 1);
+    assert_eq!(groups.commands[0].kind, "exec_command_end");
     assert_eq!(groups.file_changes.len(), 1);
     assert_eq!(groups.web_searches.len(), 1);
-    assert_eq!(groups.failure_count, 1);
+    assert_eq!(groups.failures.len(), 2);
+    assert_eq!(groups.failure_count, 2);
 }
 
 #[test]
-fn skill_evidence_groups_by_skill_name() {
-    let evidence = vec![
-        codex::ParsedSkillEvidence {
-            timestamp: "2026-07-01T10:00:00Z".to_string(),
-            skill_name: "superpowers:brainstorming".to_string(),
-            evidence_type: "skill_file_read".to_string(),
-            confidence: "high".to_string(),
-            detail: "read SKILL.md".to_string(),
-        },
-        codex::ParsedSkillEvidence {
-            timestamp: "2026-07-01T10:01:00Z".to_string(),
-            skill_name: "superpowers:brainstorming".to_string(),
-            evidence_type: "assistant_announcement".to_string(),
-            confidence: "medium".to_string(),
-            detail: "Using `superpowers:brainstorming`".to_string(),
-        },
-        codex::ParsedSkillEvidence {
-            timestamp: "2026-07-01T10:02:00Z".to_string(),
-            skill_name: "openai-docs".to_string(),
-            evidence_type: "skill_file_read".to_string(),
-            confidence: "high".to_string(),
-            detail: "read SKILL.md".to_string(),
-        },
-    ];
+fn visible_tool_events_limits_each_section_to_five_items() {
+    let events = (0..8)
+        .map(|index| codex::ParsedToolEvent {
+            timestamp: format!("2026-07-01T10:0{index}:00Z"),
+            kind: "function_call".to_string(),
+            name: "exec_command".to_string(),
+            summary: format!("command {index}"),
+            status: None,
+            call_id: Some(format!("call_{index}")),
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
+        })
+        .collect::<Vec<_>>();
+    let refs = events.iter().collect::<Vec<_>>();
 
-    let groups = group_skill_evidence(&evidence);
+    let visible = visible_tool_events(&refs);
 
-    assert_eq!(groups.len(), 2);
-    assert_eq!(groups[0].skill_name, "superpowers:brainstorming");
-    assert_eq!(groups[0].highest_confidence, "high");
-    assert_eq!(groups[0].evidence.len(), 2);
-    assert_eq!(groups[1].skill_name, "openai-docs");
-    assert_eq!(groups[1].evidence.len(), 1);
+    assert_eq!(visible.events.len(), 5);
+    assert_eq!(visible.omitted_count, 3);
 }
 
 #[test]
