@@ -183,6 +183,20 @@ impl Database {
         rows_to_summaries(rows)
     }
 
+    pub fn list_sessions_for_cwd(&self, cwd: &str, limit: usize) -> Result<Vec<SessionSummary>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT session_id, started_at, cwd, title, source_path
+            FROM sessions
+            WHERE cwd = ?1
+            ORDER BY started_at DESC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = statement.query_map(params![cwd, limit as i64], summary_from_row)?;
+        rows_to_summaries(rows)
+    }
+
     pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionSummary>> {
         let Some(fts_query) = plain_text_fts_query(query) else {
             return Ok(Vec::new());
@@ -199,6 +213,30 @@ impl Database {
             "#,
         )?;
         let rows = statement.query_map(params![fts_query, limit as i64], summary_from_row)?;
+        rows_to_summaries(rows)
+    }
+
+    pub fn search_sessions_for_cwd(
+        &self,
+        cwd: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionSummary>> {
+        let Some(fts_query) = plain_text_fts_query(query) else {
+            return Ok(Vec::new());
+        };
+
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT s.session_id, s.started_at, s.cwd, s.title, s.source_path
+            FROM session_fts f
+            JOIN sessions s ON s.session_id = f.session_id
+            WHERE session_fts MATCH ?1 AND s.cwd = ?2
+            ORDER BY rank
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = statement.query_map(params![fts_query, cwd, limit as i64], summary_from_row)?;
         rows_to_summaries(rows)
     }
 

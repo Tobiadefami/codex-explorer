@@ -20,6 +20,9 @@ TUI keys:
 - type to search
 - `Backspace` edits search
 - `Up`/`Down` moves selection
+- `a` shows all projects
+- `p` returns to the current directory
+- `PgUp`/`PgDn` scrolls the preview
 - `Enter` resumes the selected session
 - `Esc` quits
 - `q` quits when the search box is empty

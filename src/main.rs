@@ -78,8 +78,10 @@ fn main() -> Result<()> {
         None => {
             let db_path = resolve_db_path(db)?;
             let sessions_dir = resolve_sessions_dir(sessions_dir)?;
+            let current_dir =
+                std::env::current_dir().context("could not resolve current directory")?;
             let database = Database::open(&db_path)?;
-            if let Some(session_id) = tui::run(&database, db_path, sessions_dir)? {
+            if let Some(session_id) = tui::run(&database, db_path, sessions_dir, current_dir)? {
                 let command = codex_cmd::resume_command(&session_id);
                 let code = codex_cmd::run(command)?;
                 std::process::exit(code);
