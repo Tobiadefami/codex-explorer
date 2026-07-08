@@ -77,3 +77,41 @@ fn parses_thread_source_for_subagent_sessions() {
     assert_eq!(parsed.thread_source.as_deref(), Some("subagent"));
     assert!(parsed.is_subagent_thread());
 }
+
+#[test]
+fn extracts_overview_activity_tool_events_and_skill_evidence() {
+    let parsed =
+        codex::parse_session_file(Path::new("tests/fixtures/session-overview-ui.jsonl")).unwrap();
+
+    assert_eq!(parsed.title, "add turnstile to the signup form");
+    assert_eq!(parsed.last_activity_at, "2026-07-02T09:06:04Z");
+    assert_eq!(
+        parsed.latest_user_message.as_deref(),
+        Some("now audit how skills are used")
+    );
+    assert_eq!(
+        parsed.latest_assistant_message.as_deref(),
+        Some("I found skill reads and assistant announcements in the local session logs.")
+    );
+
+    assert_eq!(parsed.tool_events.len(), 3);
+    assert_eq!(parsed.tool_events[0].kind, "function_call");
+    assert_eq!(parsed.tool_events[0].name, "exec_command");
+    assert!(parsed.tool_events[0].summary.contains("SKILL.md"));
+    assert_eq!(parsed.tool_events[1].kind, "function_call_output");
+    assert_eq!(parsed.tool_events[2].kind, "task_complete");
+    assert_eq!(parsed.tool_events[2].status.as_deref(), Some("completed"));
+
+    assert_eq!(parsed.skill_evidence.len(), 2);
+    assert_eq!(
+        parsed.skill_evidence[0].skill_name,
+        "superpowers:brainstorming"
+    );
+    assert_eq!(parsed.skill_evidence[0].evidence_type, "skill_file_read");
+    assert_eq!(parsed.skill_evidence[0].confidence, "high");
+    assert_eq!(
+        parsed.skill_evidence[1].evidence_type,
+        "assistant_announcement"
+    );
+    assert_eq!(parsed.skill_evidence[1].confidence, "medium");
+}

@@ -3,14 +3,17 @@ use std::{collections::HashSet, path::Path};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
-use crate::codex::{ParsedMessage, ParsedSession};
+use crate::codex::{ParsedMessage, ParsedSession, ParsedSkillEvidence, ParsedToolEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
     pub session_id: String,
     pub started_at: String,
+    pub last_activity_at: String,
     pub cwd: String,
     pub title: String,
+    pub latest_user_message: Option<String>,
+    pub latest_assistant_message: Option<String>,
     pub source_path: String,
 }
 
@@ -18,6 +21,8 @@ pub struct SessionSummary {
 pub struct SessionDetail {
     pub summary: SessionSummary,
     pub messages: Vec<ParsedMessage>,
+    pub tool_events: Vec<ParsedToolEvent>,
+    pub skill_evidence: Vec<ParsedSkillEvidence>,
 }
 
 pub struct Database {
@@ -52,6 +57,9 @@ impl Database {
                 source_path TEXT NOT NULL UNIQUE,
                 modified_unix_seconds INTEGER NOT NULL,
                 title TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL DEFAULT '',
+                latest_user_message TEXT,
+                latest_assistant_message TEXT,
                 searchable_text TEXT NOT NULL
             );
 
@@ -71,8 +79,52 @@ impl Database {
                 cwd,
                 searchable_text
             );
+
+            CREATE TABLE IF NOT EXISTS tool_events (
+                session_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                name TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                status TEXT,
+                PRIMARY KEY (session_id, position),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_evidence (
+                session_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                skill_name TEXT NOT NULL,
+                evidence_type TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                PRIMARY KEY (session_id, position),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            );
             "#,
         )?;
+        self.add_column_if_missing("sessions", "last_activity_at", "TEXT NOT NULL DEFAULT ''")?;
+        self.add_column_if_missing("sessions", "latest_user_message", "TEXT")?;
+        self.add_column_if_missing("sessions", "latest_assistant_message", "TEXT")?;
+        Ok(())
+    }
+
+    fn add_column_if_missing(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+        let mut statement = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !columns
+            .iter()
+            .any(|existing_column| existing_column == column)
+        {
+            self.conn.execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -99,6 +151,14 @@ impl Database {
                 params![existing_session_id],
             )?;
             tx.execute(
+                "DELETE FROM tool_events WHERE session_id = ?1",
+                params![existing_session_id],
+            )?;
+            tx.execute(
+                "DELETE FROM skill_evidence WHERE session_id = ?1",
+                params![existing_session_id],
+            )?;
+            tx.execute(
                 "DELETE FROM session_fts WHERE session_id = ?1",
                 params![existing_session_id],
             )?;
@@ -112,9 +172,10 @@ impl Database {
             r#"
             INSERT INTO sessions (
                 session_id, started_at, cwd, cli_version, model_provider,
-                source_path, modified_unix_seconds, title, searchable_text
+                source_path, modified_unix_seconds, title, last_activity_at,
+                latest_user_message, latest_assistant_message, searchable_text
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(session_id) DO UPDATE SET
                 started_at = excluded.started_at,
                 cwd = excluded.cwd,
@@ -123,6 +184,9 @@ impl Database {
                 source_path = excluded.source_path,
                 modified_unix_seconds = excluded.modified_unix_seconds,
                 title = excluded.title,
+                last_activity_at = excluded.last_activity_at,
+                latest_user_message = excluded.latest_user_message,
+                latest_assistant_message = excluded.latest_assistant_message,
                 searchable_text = excluded.searchable_text
             "#,
             params![
@@ -134,6 +198,9 @@ impl Database {
                 source_path,
                 session.modified_unix_seconds,
                 session.title,
+                session.last_activity_at,
+                session.latest_user_message,
+                session.latest_assistant_message,
                 session.searchable_text,
             ],
         )?;
@@ -150,6 +217,47 @@ impl Database {
                     message.timestamp,
                     message.role,
                     message.text
+                ],
+            )?;
+        }
+
+        for (position, event) in session.tool_events.iter().enumerate() {
+            tx.execute(
+                r#"
+                INSERT INTO tool_events (
+                    session_id, position, timestamp, kind, name, summary, status
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+                params![
+                    session.session_id,
+                    position as i64,
+                    event.timestamp,
+                    event.kind,
+                    event.name,
+                    event.summary,
+                    event.status,
+                ],
+            )?;
+        }
+
+        for (position, evidence) in session.skill_evidence.iter().enumerate() {
+            tx.execute(
+                r#"
+                INSERT INTO skill_evidence (
+                    session_id, position, timestamp, skill_name,
+                    evidence_type, confidence, detail
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+                params![
+                    session.session_id,
+                    position as i64,
+                    evidence.timestamp,
+                    evidence.skill_name,
+                    evidence.evidence_type,
+                    evidence.confidence,
+                    evidence.detail,
                 ],
             )?;
         }
@@ -173,9 +281,10 @@ impl Database {
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>> {
         let mut statement = self.conn.prepare(
             r#"
-            SELECT session_id, started_at, cwd, title, source_path
+            SELECT session_id, started_at, last_activity_at, cwd, title,
+                   latest_user_message, latest_assistant_message, source_path
             FROM sessions
-            ORDER BY started_at DESC
+            ORDER BY last_activity_at DESC, started_at DESC
             LIMIT ?1
             "#,
         )?;
@@ -186,10 +295,11 @@ impl Database {
     pub fn list_sessions_for_cwd(&self, cwd: &str, limit: usize) -> Result<Vec<SessionSummary>> {
         let mut statement = self.conn.prepare(
             r#"
-            SELECT session_id, started_at, cwd, title, source_path
+            SELECT session_id, started_at, last_activity_at, cwd, title,
+                   latest_user_message, latest_assistant_message, source_path
             FROM sessions
             WHERE cwd = ?1
-            ORDER BY started_at DESC
+            ORDER BY last_activity_at DESC, started_at DESC
             LIMIT ?2
             "#,
         )?;
@@ -204,7 +314,8 @@ impl Database {
 
         let mut statement = self.conn.prepare(
             r#"
-            SELECT s.session_id, s.started_at, s.cwd, s.title, s.source_path
+            SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
+                   s.latest_user_message, s.latest_assistant_message, s.source_path
             FROM session_fts f
             JOIN sessions s ON s.session_id = f.session_id
             WHERE session_fts MATCH ?1
@@ -228,7 +339,8 @@ impl Database {
 
         let mut statement = self.conn.prepare(
             r#"
-            SELECT s.session_id, s.started_at, s.cwd, s.title, s.source_path
+            SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
+                   s.latest_user_message, s.latest_assistant_message, s.source_path
             FROM session_fts f
             JOIN sessions s ON s.session_id = f.session_id
             WHERE session_fts MATCH ?1 AND s.cwd = ?2
@@ -244,7 +356,8 @@ impl Database {
         let summary = {
             let mut statement = self.conn.prepare(
                 r#"
-                SELECT session_id, started_at, cwd, title, source_path
+                SELECT session_id, started_at, last_activity_at, cwd, title,
+                       latest_user_message, latest_assistant_message, source_path
                 FROM sessions
                 WHERE session_id = ?1
                 "#,
@@ -278,7 +391,52 @@ impl Database {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        Ok(Some(SessionDetail { summary, messages }))
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT timestamp, kind, name, summary, status
+            FROM tool_events
+            WHERE session_id = ?1
+            ORDER BY position ASC
+            "#,
+        )?;
+        let tool_events = statement
+            .query_map(params![session_id], |row| {
+                Ok(ParsedToolEvent {
+                    timestamp: row.get(0)?,
+                    kind: row.get(1)?,
+                    name: row.get(2)?,
+                    summary: row.get(3)?,
+                    status: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT timestamp, skill_name, evidence_type, confidence, detail
+            FROM skill_evidence
+            WHERE session_id = ?1
+            ORDER BY position ASC
+            "#,
+        )?;
+        let skill_evidence = statement
+            .query_map(params![session_id], |row| {
+                Ok(ParsedSkillEvidence {
+                    timestamp: row.get(0)?,
+                    skill_name: row.get(1)?,
+                    evidence_type: row.get(2)?,
+                    confidence: row.get(3)?,
+                    detail: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(Some(SessionDetail {
+            summary,
+            messages,
+            tool_events,
+            skill_evidence,
+        }))
     }
 
     pub fn delete_source_path(&self, source_path: &Path) -> Result<usize> {
@@ -383,8 +541,11 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary>
     Ok(SessionSummary {
         session_id: row.get(0)?,
         started_at: row.get(1)?,
-        cwd: row.get(2)?,
-        title: row.get(3)?,
-        source_path: row.get(4)?,
+        last_activity_at: row.get(2)?,
+        cwd: row.get(3)?,
+        title: row.get(4)?,
+        latest_user_message: row.get(5)?,
+        latest_assistant_message: row.get(6)?,
+        source_path: row.get(7)?,
     })
 }

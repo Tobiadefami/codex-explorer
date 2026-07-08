@@ -1,8 +1,28 @@
 use std::path::Path;
 
-use crate::codex::ParsedMessage;
+use crate::codex::{ParsedMessage, ParsedSkillEvidence, ParsedToolEvent};
 
 use super::refresh::RefreshStatus;
+
+pub struct ConversationWindows<'a> {
+    pub opening: Vec<&'a ParsedMessage>,
+    pub omitted_count: usize,
+    pub recent: Vec<&'a ParsedMessage>,
+}
+
+pub struct ToolEventGroups<'a> {
+    pub commands: Vec<&'a ParsedToolEvent>,
+    pub file_changes: Vec<&'a ParsedToolEvent>,
+    pub web_searches: Vec<&'a ParsedToolEvent>,
+    pub other_events: Vec<&'a ParsedToolEvent>,
+    pub failure_count: usize,
+}
+
+pub struct SkillEvidenceGroup<'a> {
+    pub skill_name: String,
+    pub highest_confidence: String,
+    pub evidence: Vec<&'a ParsedSkillEvidence>,
+}
 
 pub fn short_session_id(session_id: &str) -> String {
     if session_id.len() <= 16 {
@@ -55,15 +75,93 @@ pub fn empty_state_message(query: &str, refresh_status: &RefreshStatus) -> Strin
     }
 }
 
-pub fn meaningful_preview_messages(
+pub fn conversation_windows(
     messages: &[ParsedMessage],
-    limit: usize,
-) -> Vec<&ParsedMessage> {
-    messages
+    window_size: usize,
+) -> ConversationWindows<'_> {
+    let meaningful_messages = messages
         .iter()
         .filter(|message| is_meaningful_message(&message.text))
-        .take(limit)
-        .collect()
+        .collect::<Vec<_>>();
+
+    if meaningful_messages.len() <= window_size * 2 {
+        return ConversationWindows {
+            opening: meaningful_messages,
+            omitted_count: 0,
+            recent: Vec::new(),
+        };
+    }
+
+    let opening = meaningful_messages
+        .iter()
+        .take(window_size)
+        .copied()
+        .collect::<Vec<_>>();
+    let recent_start = meaningful_messages.len() - window_size;
+    let recent = meaningful_messages
+        .iter()
+        .skip(recent_start)
+        .copied()
+        .collect::<Vec<_>>();
+
+    ConversationWindows {
+        opening,
+        omitted_count: recent_start - window_size,
+        recent,
+    }
+}
+
+pub fn group_tool_events(events: &[ParsedToolEvent]) -> ToolEventGroups<'_> {
+    let mut groups = ToolEventGroups {
+        commands: Vec::new(),
+        file_changes: Vec::new(),
+        web_searches: Vec::new(),
+        other_events: Vec::new(),
+        failure_count: 0,
+    };
+
+    for event in events {
+        if is_failure(event) {
+            groups.failure_count += 1;
+        }
+
+        if event.name == "exec_command" {
+            groups.commands.push(event);
+        } else if event.name == "apply_patch" || event.kind == "patch_apply_end" {
+            groups.file_changes.push(event);
+        } else if event.name == "web_search" {
+            groups.web_searches.push(event);
+        } else if !is_low_signal_tool_event(event) {
+            groups.other_events.push(event);
+        }
+    }
+
+    groups
+}
+
+pub fn group_skill_evidence(evidence: &[ParsedSkillEvidence]) -> Vec<SkillEvidenceGroup<'_>> {
+    let mut groups: Vec<SkillEvidenceGroup<'_>> = Vec::new();
+
+    for item in evidence {
+        match groups
+            .iter_mut()
+            .find(|group| group.skill_name == item.skill_name)
+        {
+            Some(group) => {
+                if confidence_rank(&item.confidence) > confidence_rank(&group.highest_confidence) {
+                    group.highest_confidence = item.confidence.clone();
+                }
+                group.evidence.push(item);
+            }
+            None => groups.push(SkillEvidenceGroup {
+                skill_name: item.skill_name.clone(),
+                highest_confidence: item.confidence.clone(),
+                evidence: vec![item],
+            }),
+        }
+    }
+
+    groups
 }
 
 pub(super) fn preview_text(text: &str) -> String {
@@ -105,4 +203,31 @@ fn is_meaningful_message(text: &str) -> bool {
     !BOOTSTRAP_PREFIXES
         .iter()
         .any(|prefix| text.starts_with(prefix))
+}
+
+fn is_failure(event: &ParsedToolEvent) -> bool {
+    event
+        .status
+        .as_deref()
+        .map(|status| {
+            let status = status.to_ascii_lowercase();
+            status.contains("fail") || status.contains("error")
+        })
+        .unwrap_or(false)
+}
+
+fn is_low_signal_tool_event(event: &ParsedToolEvent) -> bool {
+    matches!(
+        event.kind.as_str(),
+        "function_call_output" | "custom_tool_call_output" | "task_complete"
+    )
+}
+
+fn confidence_rank(confidence: &str) -> u8 {
+    match confidence {
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
 }
