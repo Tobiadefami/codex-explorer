@@ -1,5 +1,11 @@
+#[allow(dead_code)]
+#[path = "../src/audit.rs"]
+mod audit;
 #[path = "../src/codex.rs"]
 mod codex;
+#[allow(dead_code)]
+#[path = "../src/codex_cmd.rs"]
+mod codex_cmd;
 #[allow(dead_code)]
 #[path = "../src/db.rs"]
 mod db;
@@ -163,6 +169,10 @@ fn state_tracks_preview_modes() {
     state.set_preview_mode(PreviewMode::Timeline);
     assert_eq!(state.preview_mode(), PreviewMode::Timeline);
     assert_eq!(state.preview_mode_label(), "Timeline");
+
+    state.set_preview_mode(PreviewMode::Audit);
+    assert_eq!(state.preview_mode(), PreviewMode::Audit);
+    assert_eq!(state.preview_mode_label(), "Audit");
 }
 
 #[test]

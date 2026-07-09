@@ -3,7 +3,10 @@ use std::{collections::HashSet, path::Path};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
-use crate::codex::{ParsedMessage, ParsedSession, ParsedSessionItem, ParsedToolEvent};
+use crate::{
+    audit::{AuditStatus, SessionAuditRecord, SessionAuditResult},
+    codex::{ParsedMessage, ParsedSession, ParsedSessionItem, ParsedToolEvent},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
@@ -109,6 +112,22 @@ impl Database {
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS session_audits (
+                session_id TEXT PRIMARY KEY,
+                source_modified_unix_seconds INTEGER NOT NULL,
+                audit_input_version INTEGER NOT NULL,
+                prompt_version INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                reasoning_effort TEXT NOT NULL,
+                status TEXT NOT NULL,
+                gist TEXT NOT NULL,
+                hinge TEXT NOT NULL,
+                next TEXT NOT NULL,
+                signals_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            );
+
             "#,
         )?;
         self.add_column_if_missing("sessions", "last_activity_at", "TEXT NOT NULL DEFAULT ''")?;
@@ -157,6 +176,10 @@ impl Database {
         };
 
         for existing_session_id in &existing_session_ids {
+            tx.execute(
+                "DELETE FROM session_audits WHERE session_id = ?1",
+                params![existing_session_id],
+            )?;
             tx.execute(
                 "DELETE FROM session_items WHERE session_id = ?1",
                 params![existing_session_id],
@@ -452,6 +475,88 @@ impl Database {
         }))
     }
 
+    pub fn upsert_session_audit(&self, record: &SessionAuditRecord) -> Result<()> {
+        let status = serde_json::to_string(&record.result.status)?
+            .trim_matches('"')
+            .to_string();
+        let signals_json = serde_json::to_string(&record.result.signals)?;
+        self.conn.execute(
+            r#"
+            INSERT INTO session_audits (
+                session_id, source_modified_unix_seconds, audit_input_version,
+                prompt_version, model, reasoning_effort, status, gist, hinge,
+                next, signals_json, created_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(session_id) DO UPDATE SET
+                source_modified_unix_seconds = excluded.source_modified_unix_seconds,
+                audit_input_version = excluded.audit_input_version,
+                prompt_version = excluded.prompt_version,
+                model = excluded.model,
+                reasoning_effort = excluded.reasoning_effort,
+                status = excluded.status,
+                gist = excluded.gist,
+                hinge = excluded.hinge,
+                next = excluded.next,
+                signals_json = excluded.signals_json,
+                created_at = excluded.created_at
+            "#,
+            params![
+                record.session_id,
+                record.source_modified_unix_seconds,
+                record.audit_input_version,
+                record.prompt_version,
+                record.model,
+                record.reasoning_effort,
+                status,
+                record.result.gist,
+                record.result.hinge,
+                record.result.next,
+                signals_json,
+                record.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_fresh_session_audit(
+        &self,
+        session_id: &str,
+        source_modified_unix_seconds: i64,
+        audit_input_version: i64,
+        prompt_version: i64,
+        model: &str,
+        reasoning_effort: &str,
+    ) -> Result<Option<SessionAuditRecord>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT session_id, source_modified_unix_seconds, audit_input_version,
+                   prompt_version, model, reasoning_effort, status, gist, hinge,
+                   next, signals_json, created_at
+            FROM session_audits
+            WHERE session_id = ?1
+              AND source_modified_unix_seconds = ?2
+              AND audit_input_version = ?3
+              AND prompt_version = ?4
+              AND model = ?5
+              AND reasoning_effort = ?6
+            "#,
+        )?;
+        let mut rows = statement.query(params![
+            session_id,
+            source_modified_unix_seconds,
+            audit_input_version,
+            prompt_version,
+            model,
+            reasoning_effort,
+        ])?;
+
+        match rows.next()? {
+            Some(row) => Ok(Some(audit_record_from_row(row)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn delete_source_path(&self, source_path: &Path) -> Result<usize> {
         let source_path = source_path.display().to_string();
         let session_ids = {
@@ -470,6 +575,10 @@ impl Database {
 
         let tx = self.conn.unchecked_transaction()?;
         for session_id in &session_ids {
+            tx.execute(
+                "DELETE FROM session_audits WHERE session_id = ?1",
+                params![session_id],
+            )?;
             tx.execute(
                 "DELETE FROM session_fts WHERE session_id = ?1",
                 params![session_id],
@@ -513,6 +622,10 @@ impl Database {
 
         let tx = self.conn.unchecked_transaction()?;
         for session_id in &session_ids_to_prune {
+            tx.execute(
+                "DELETE FROM session_audits WHERE session_id = ?1",
+                params![session_id],
+            )?;
             tx.execute(
                 "DELETE FROM session_fts WHERE session_id = ?1",
                 params![session_id],
@@ -562,4 +675,33 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary>
         git_branch: row.get(7)?,
         source_path: row.get(8)?,
     })
+}
+
+fn audit_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionAuditRecord> {
+    let status_text: String = row.get(6)?;
+    let status = serde_json::from_str::<AuditStatus>(&format!("\"{status_text}\""))
+        .map_err(json_to_sql_error)?;
+    let signals_json: String = row.get(10)?;
+    let signals = serde_json::from_str::<Vec<String>>(&signals_json).map_err(json_to_sql_error)?;
+
+    Ok(SessionAuditRecord {
+        session_id: row.get(0)?,
+        source_modified_unix_seconds: row.get(1)?,
+        audit_input_version: row.get(2)?,
+        prompt_version: row.get(3)?,
+        model: row.get(4)?,
+        reasoning_effort: row.get(5)?,
+        result: SessionAuditResult {
+            status,
+            gist: row.get(7)?,
+            hinge: row.get(8)?,
+            next: row.get(9)?,
+            signals,
+        },
+        created_at: row.get(11)?,
+    })
+}
+
+fn json_to_sql_error(error: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }

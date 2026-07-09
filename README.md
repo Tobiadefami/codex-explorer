@@ -46,6 +46,7 @@ cx reindex
 cx list
 cx search "turnstile worker"
 cx show <session-id>
+cx audit <session-id>
 cx resume <session-id>
 ```
 
@@ -58,6 +59,14 @@ TUI keys:
 - `Up`/`Down` moves selection
 - `a` shows all projects
 - `p` returns to the current directory
+- `r` refreshes the index
+- `e` expands or collapses the selected row
+- `i` runs or refreshes an audit for the selected session
+- `1` shows the overview preview
+- `2` shows the conversation preview
+- `3` shows tool activity
+- `4` shows the timeline
+- `5` shows the audit preview
 - `PgUp`/`PgDn` scrolls the preview
 - `Enter` resumes the selected session
 - `Esc` quits
@@ -70,6 +79,21 @@ TUI keys:
 The index is local SQLite data. It contains session metadata, source file paths, titles, searchable text, and full user/assistant message text so `cx show`, search, and previews work without reparsing every JSONL file each time. Treat this index as private local data, because Codex sessions may contain prompts, code, file paths, command output, and other sensitive project context. Use `--db <PATH>` to write the index somewhere else.
 
 `cx` reads Codex session files from `~/.codex/sessions` by default. Use `--sessions-dir <PATH>` to index a different directory.
+
+## Session Audits
+
+`cx audit <session-id>` builds a compact transcript from the local SQLite index, sends it to `codex exec`, and caches the structured result. It does not send raw JSONL. By default, audits use `gpt-5.6-luna` with low reasoning effort:
+
+```bash
+cx audit <session-id>
+cx audit --refresh <session-id>
+cx audit --model gpt-5.6-luna --reasoning-effort low <session-id>
+cx audit --print-input <session-id>
+```
+
+Use `--print-input` to inspect the compact transcript without running Codex.
+
+In the TUI, press `5` to open the audit preview for the selected session. Press `i` to run or refresh that session's audit without leaving the TUI.
 
 ## Development
 
