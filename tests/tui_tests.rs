@@ -12,7 +12,8 @@ mod tui;
 use db::Database;
 use tui::format::{
     compact_path, compact_timestamp, conversation_windows, empty_results_message,
-    empty_state_message, group_tool_events, short_session_id, visible_tool_events,
+    empty_state_message, group_tool_events, session_overview_detail_rows,
+    session_summary_text_lines, short_session_id, visible_tool_events,
 };
 use tui::refresh::RefreshStatus;
 use tui::state::{PreviewMode, ProjectScope, TuiState};
@@ -162,6 +163,87 @@ fn state_tracks_preview_modes() {
     state.set_preview_mode(PreviewMode::Timeline);
     assert_eq!(state.preview_mode(), PreviewMode::Timeline);
     assert_eq!(state.preview_mode_label(), "Timeline");
+}
+
+#[test]
+fn state_toggles_expansion_for_selected_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    assert_eq!(state.expanded_session_id(), None);
+
+    let first_session_id = state.selected_session_id().unwrap().to_string();
+    state.toggle_selected_expansion();
+    assert_eq!(state.expanded_session_id(), Some(first_session_id.as_str()));
+    assert!(state.is_summary_expanded(state.selected_summary().unwrap()));
+
+    state.move_down();
+    assert_eq!(state.expanded_session_id(), Some(first_session_id.as_str()));
+    assert!(!state.is_summary_expanded(state.selected_summary().unwrap()));
+
+    let second_session_id = state.selected_session_id().unwrap().to_string();
+    state.toggle_selected_expansion();
+    assert_eq!(
+        state.expanded_session_id(),
+        Some(second_session_id.as_str())
+    );
+
+    state.toggle_selected_expansion();
+    assert_eq!(state.expanded_session_id(), None);
+}
+
+#[test]
+fn reload_clears_stale_expanded_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    state.toggle_selected_expansion();
+    assert!(state.expanded_session_id().is_some());
+
+    state
+        .set_query(&database, "not-present".to_string())
+        .unwrap();
+
+    assert!(state.summaries().is_empty());
+    assert_eq!(state.expanded_session_id(), None);
+}
+
+#[test]
+fn expanded_session_summary_lines_focus_on_branch_activity_and_messages() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let summary = database
+        .search_sessions("feature/session-browser", 10)
+        .unwrap()
+        .remove(0);
+
+    let lines = session_summary_text_lines(&summary, true);
+
+    assert_eq!(lines[0], "add turnstile to the signup form");
+    assert!(lines[1].contains("⌁ project-a"));
+    assert!(lines[1].contains(" feature/session-browser"));
+    assert!(lines[1].contains("◷ 2026-07-01 10:00"));
+    assert!(lines[2].contains("User: add turnstile to the signup form"));
+    assert!(lines[3].contains("Assistant: I will inspect the Worker and form code."));
+    assert_eq!(lines.len(), 4);
+}
+
+#[test]
+fn overview_detail_rows_include_git_branch_when_present() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let summary = database
+        .search_sessions("feature/session-browser", 10)
+        .unwrap()
+        .remove(0);
+
+    let rows = session_overview_detail_rows(&summary);
+
+    assert!(rows
+        .iter()
+        .any(|row| row.label == "Branch" && row.value == "feature/session-browser"));
 }
 
 #[test]

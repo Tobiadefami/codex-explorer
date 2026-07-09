@@ -14,7 +14,8 @@ use crate::{
 use super::{
     format::{
         compact_path, compact_timestamp, conversation_windows, empty_state_message,
-        group_tool_events, preview_text, short_session_id, visible_tool_events,
+        group_tool_events, preview_text, session_overview_detail_rows, session_summary_text_lines,
+        short_session_id, visible_tool_events,
     },
     refresh::RefreshStatus,
     state::{PreviewMode, TuiState},
@@ -119,7 +120,7 @@ fn render_session_list(
         state
             .summaries()
             .iter()
-            .map(session_list_item)
+            .map(|summary| session_list_item(summary, state.is_summary_expanded(summary)))
             .collect::<Vec<_>>()
     };
 
@@ -143,13 +144,24 @@ fn render_session_list(
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn session_list_item(summary: &SessionSummary) -> ListItem<'static> {
-    ListItem::new(Line::from(Span::styled(
-        summary.title.clone(),
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )))
+fn session_list_item(summary: &SessionSummary, expanded: bool) -> ListItem<'static> {
+    let lines = session_summary_text_lines(summary, expanded)
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                Line::from(Span::styled(
+                    line,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(Span::styled(line, secondary_style()))
+            }
+        })
+        .collect::<Vec<_>>();
+    ListItem::new(lines)
 }
 
 fn render_preview(
@@ -180,7 +192,7 @@ fn render_preview(
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type search | r reindex | 1 overview | 2 conversation | 3 tools | 4 timeline | a all | p project | Enter resume | Esc quit",
+        "Type search | e expand | r reindex | 1 overview | 2 conversation | 3 tools | 4 timeline | a all | p project | Enter resume | Esc quit",
     )
     .style(secondary_style());
     frame.render_widget(help, area);
@@ -216,22 +228,26 @@ fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
         message_or_empty(latest_assistant_message(detail)),
         Line::from(""),
         section_label("Session Details"),
-        Line::from(vec![
-            Span::styled("Project: ", label_style()),
-            Span::raw(compact_path(&detail.summary.cwd)),
-        ]),
-        Line::from(vec![
-            Span::styled("Path: ", label_style()),
-            Span::styled(detail.summary.cwd.clone(), secondary_style()),
-        ]),
-        Line::from(vec![
-            Span::styled("Started: ", label_style()),
-            Span::raw(compact_timestamp(&detail.summary.started_at)),
-        ]),
-        Line::from(vec![
-            Span::styled("Last active: ", label_style()),
-            Span::raw(compact_timestamp(&detail.summary.last_activity_at)),
-        ]),
+    ];
+    append_overview_detail_rows(&mut lines, detail);
+
+    add_action_lines(&mut lines, detail);
+    lines
+}
+
+fn append_overview_detail_rows(lines: &mut Vec<Line<'static>>, detail: &SessionDetail) {
+    for row in session_overview_detail_rows(&detail.summary) {
+        let value_span = if row.label == "Path" {
+            Span::styled(row.value, secondary_style())
+        } else {
+            Span::raw(row.value)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}: ", row.label), label_style()),
+            value_span,
+        ]));
+    }
+    lines.extend([
         Line::from(""),
         section_label("Counts"),
         Line::from(vec![
@@ -242,10 +258,7 @@ fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
             Span::styled("  Items: ", label_style()),
             Span::raw(detail.items.len().to_string()),
         ]),
-    ];
-
-    add_action_lines(&mut lines, detail);
-    lines
+    ]);
 }
 
 fn conversation_lines(detail: &SessionDetail) -> Vec<Line<'static>> {

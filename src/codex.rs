@@ -15,6 +15,7 @@ pub struct ParsedSession {
     pub cwd: String,
     pub cli_version: Option<String>,
     pub model_provider: Option<String>,
+    pub git_branch: Option<String>,
     pub parent_thread_id: Option<String>,
     pub thread_source: Option<String>,
     pub source_path: PathBuf,
@@ -68,6 +69,7 @@ pub struct ParsedSessionMeta {
     pub cwd: Option<String>,
     pub cli_version: Option<String>,
     pub model_provider: Option<String>,
+    pub git_branch: Option<String>,
     pub parent_thread_id: Option<String>,
     pub thread_source: Option<String>,
 }
@@ -135,6 +137,7 @@ fn derive_session_from_items(
     let mut cwd = None;
     let mut cli_version = None;
     let mut model_provider = None;
+    let mut git_branch = None;
     let mut parent_thread_id = None;
     let mut thread_source = None;
     let mut messages = Vec::new();
@@ -151,6 +154,7 @@ fn derive_session_from_items(
                 cwd = meta.cwd.clone();
                 cli_version = meta.cli_version.clone();
                 model_provider = meta.model_provider.clone();
+                git_branch = meta.git_branch.clone();
                 parent_thread_id = meta.parent_thread_id.clone();
                 thread_source = meta.thread_source.clone();
             }
@@ -184,16 +188,17 @@ fn derive_session_from_items(
         .filter_map(title_from_message)
         .next()
         .unwrap_or_else(|| session_id.clone());
-    let searchable_text = messages
-        .iter()
-        .filter_map(searchable_text_from_message)
-        .chain(
-            tool_events
-                .iter()
-                .filter_map(searchable_text_from_tool_event),
-        )
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut searchable_parts = Vec::new();
+    if let Some(branch) = &git_branch {
+        searchable_parts.push(branch.clone());
+    }
+    searchable_parts.extend(messages.iter().filter_map(searchable_text_from_message));
+    searchable_parts.extend(
+        tool_events
+            .iter()
+            .filter_map(searchable_text_from_tool_event),
+    );
+    let searchable_text = searchable_parts.join("\n");
     if last_activity_at.is_empty() {
         last_activity_at = started_at.clone();
     }
@@ -204,6 +209,7 @@ fn derive_session_from_items(
         cwd,
         cli_version,
         model_provider,
+        git_branch,
         parent_thread_id,
         thread_source,
         source_path: path.to_path_buf(),
@@ -254,6 +260,9 @@ fn parse_session_meta(timestamp: &str, payload: &Value) -> ParsedSessionMeta {
         cwd: string_field(payload, "cwd"),
         cli_version: string_field(payload, "cli_version"),
         model_provider: string_field(payload, "model_provider"),
+        git_branch: payload
+            .get("git")
+            .and_then(|git| string_field(git, "branch")),
         parent_thread_id: string_field(payload, "parent_thread_id"),
         thread_source: string_field(payload, "thread_source"),
     }
