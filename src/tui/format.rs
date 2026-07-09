@@ -1,6 +1,9 @@
 use std::{collections::HashSet, path::Path};
 
-use crate::codex::{ParsedMessage, ParsedToolEvent};
+use crate::{
+    codex::{ParsedMessage, ParsedToolEvent},
+    db::SessionSummary,
+};
 
 use super::refresh::RefreshStatus;
 
@@ -24,7 +27,74 @@ pub struct VisibleToolEvents<'a> {
     pub omitted_count: usize,
 }
 
+pub struct OverviewDetailRow {
+    pub label: &'static str,
+    pub value: String,
+}
+
 pub const TOOL_SECTION_ITEM_LIMIT: usize = 5;
+const ICON_BRANCH: &str = "";
+const ICON_PROJECT: &str = "⌁";
+const ICON_UPDATED: &str = "◷";
+
+pub fn session_summary_text_lines(summary: &SessionSummary, expanded: bool) -> Vec<String> {
+    let mut lines = vec![summary.title.clone()];
+    if !expanded {
+        return lines;
+    }
+
+    lines.push(session_summary_metadata(summary));
+    lines.push(format!(
+        "User: {}",
+        summary
+            .latest_user_message
+            .as_deref()
+            .map(preview_text)
+            .unwrap_or_else(|| "No message found".to_string())
+    ));
+    lines.push(format!(
+        "Assistant: {}",
+        summary
+            .latest_assistant_message
+            .as_deref()
+            .map(preview_text)
+            .unwrap_or_else(|| "No message found".to_string())
+    ));
+    lines
+}
+
+pub fn session_overview_detail_rows(summary: &SessionSummary) -> Vec<OverviewDetailRow> {
+    let mut rows = vec![
+        OverviewDetailRow {
+            label: "Project",
+            value: compact_path(&summary.cwd),
+        },
+        OverviewDetailRow {
+            label: "Path",
+            value: summary.cwd.clone(),
+        },
+        OverviewDetailRow {
+            label: "Started",
+            value: compact_timestamp(&summary.started_at),
+        },
+        OverviewDetailRow {
+            label: "Last active",
+            value: compact_timestamp(&summary.last_activity_at),
+        },
+    ];
+
+    if let Some(branch) = summary.git_branch.as_deref() {
+        rows.insert(
+            1,
+            OverviewDetailRow {
+                label: "Branch",
+                value: branch.to_string(),
+            },
+        );
+    }
+
+    rows
+}
 
 pub fn short_session_id(session_id: &str) -> String {
     if session_id.len() <= 16 {
@@ -226,6 +296,18 @@ fn is_superseded_command_start(
             .call_id
             .as_deref()
             .is_some_and(|call_id| completed_call_ids.contains(call_id))
+}
+
+fn session_summary_metadata(summary: &SessionSummary) -> String {
+    let mut parts = vec![format!("{ICON_PROJECT} {}", compact_path(&summary.cwd))];
+    if let Some(branch) = summary.git_branch.as_deref() {
+        parts.push(format!("{ICON_BRANCH} {branch}"));
+    }
+    parts.push(format!(
+        "{ICON_UPDATED} {}",
+        compact_timestamp(&summary.last_activity_at)
+    ));
+    parts.join("  ")
 }
 
 fn tool_event_key(event: &ParsedToolEvent) -> String {

@@ -16,6 +16,10 @@ fn parses_session_metadata_and_messages() {
     assert_eq!(parsed.cli_version.as_deref(), Some("0.142.5"));
     assert_eq!(parsed.model_provider.as_deref(), Some("openai"));
     assert_eq!(
+        parsed.git_branch.as_deref(),
+        Some("feature/session-browser")
+    );
+    assert_eq!(
         parsed.source_path,
         Path::new("tests/fixtures/session-a.jsonl")
     );
@@ -30,9 +34,15 @@ fn parses_session_metadata_and_messages() {
     );
     assert_eq!(
         parsed.searchable_text,
-        "add turnstile to the signup form\nI will inspect the Worker and form code."
+        "feature/session-browser\nadd turnstile to the signup form\nI will inspect the Worker and form code."
     );
     assert_eq!(parsed.malformed_records, 0);
+    match &parsed.items[0].kind {
+        ParsedSessionItemKind::SessionMeta(meta) => {
+            assert_eq!(meta.git_branch.as_deref(), Some("feature/session-browser"));
+        }
+        other => panic!("expected session meta, got {other:?}"),
+    }
 }
 
 #[test]

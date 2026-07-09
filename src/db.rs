@@ -11,6 +11,7 @@ pub struct SessionSummary {
     pub started_at: String,
     pub last_activity_at: String,
     pub cwd: String,
+    pub git_branch: Option<String>,
     pub title: String,
     pub latest_user_message: Option<String>,
     pub latest_assistant_message: Option<String>,
@@ -56,6 +57,7 @@ impl Database {
                 cwd TEXT NOT NULL,
                 cli_version TEXT,
                 model_provider TEXT,
+                git_branch TEXT,
                 source_path TEXT NOT NULL UNIQUE,
                 modified_unix_seconds INTEGER NOT NULL,
                 title TEXT NOT NULL,
@@ -112,6 +114,7 @@ impl Database {
         self.add_column_if_missing("sessions", "last_activity_at", "TEXT NOT NULL DEFAULT ''")?;
         self.add_column_if_missing("sessions", "latest_user_message", "TEXT")?;
         self.add_column_if_missing("sessions", "latest_assistant_message", "TEXT")?;
+        self.add_column_if_missing("sessions", "git_branch", "TEXT")?;
         self.add_column_if_missing("tool_events", "call_id", "TEXT")?;
         self.add_column_if_missing("tool_events", "exit_code", "INTEGER")?;
         self.add_column_if_missing("tool_events", "duration_ms", "INTEGER")?;
@@ -181,9 +184,9 @@ impl Database {
             INSERT INTO sessions (
                 session_id, started_at, cwd, cli_version, model_provider,
                 source_path, modified_unix_seconds, title, last_activity_at,
-                latest_user_message, latest_assistant_message, searchable_text
+                latest_user_message, latest_assistant_message, git_branch, searchable_text
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             ON CONFLICT(session_id) DO UPDATE SET
                 started_at = excluded.started_at,
                 cwd = excluded.cwd,
@@ -195,6 +198,7 @@ impl Database {
                 last_activity_at = excluded.last_activity_at,
                 latest_user_message = excluded.latest_user_message,
                 latest_assistant_message = excluded.latest_assistant_message,
+                git_branch = excluded.git_branch,
                 searchable_text = excluded.searchable_text
             "#,
             params![
@@ -209,6 +213,7 @@ impl Database {
                 session.last_activity_at,
                 session.latest_user_message,
                 session.latest_assistant_message,
+                session.git_branch,
                 session.searchable_text,
             ],
         )?;
@@ -290,7 +295,7 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT session_id, started_at, last_activity_at, cwd, title,
-                   latest_user_message, latest_assistant_message, source_path
+                   latest_user_message, latest_assistant_message, git_branch, source_path
             FROM sessions
             ORDER BY last_activity_at DESC, started_at DESC
             LIMIT ?1
@@ -304,7 +309,7 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT session_id, started_at, last_activity_at, cwd, title,
-                   latest_user_message, latest_assistant_message, source_path
+                   latest_user_message, latest_assistant_message, git_branch, source_path
             FROM sessions
             WHERE cwd = ?1
             ORDER BY last_activity_at DESC, started_at DESC
@@ -323,7 +328,7 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
-                   s.latest_user_message, s.latest_assistant_message, s.source_path
+                   s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path
             FROM session_fts f
             JOIN sessions s ON s.session_id = f.session_id
             WHERE session_fts MATCH ?1
@@ -348,7 +353,7 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
-                   s.latest_user_message, s.latest_assistant_message, s.source_path
+                   s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path
             FROM session_fts f
             JOIN sessions s ON s.session_id = f.session_id
             WHERE session_fts MATCH ?1 AND s.cwd = ?2
@@ -365,7 +370,7 @@ impl Database {
             let mut statement = self.conn.prepare(
                 r#"
                 SELECT session_id, started_at, last_activity_at, cwd, title,
-                       latest_user_message, latest_assistant_message, source_path
+                       latest_user_message, latest_assistant_message, git_branch, source_path
                 FROM sessions
                 WHERE session_id = ?1
                 "#,
@@ -554,6 +559,7 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary>
         title: row.get(4)?,
         latest_user_message: row.get(5)?,
         latest_assistant_message: row.get(6)?,
-        source_path: row.get(7)?,
+        git_branch: row.get(7)?,
+        source_path: row.get(8)?,
     })
 }

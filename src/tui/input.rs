@@ -62,6 +62,10 @@ pub(super) fn handle_key(
             Ok(TuiAction::Continue)
         }
         KeyCode::Char('r') if state.query().is_empty() => Ok(TuiAction::Refresh),
+        KeyCode::Char('e') if state.query().is_empty() => {
+            state.toggle_selected_expansion();
+            Ok(TuiAction::Continue)
+        }
         KeyCode::Char('1') if state.query().is_empty() => {
             state.set_preview_mode(PreviewMode::Overview);
             Ok(TuiAction::Continue)
@@ -140,5 +144,31 @@ mod tests {
 
         assert!(matches!(action, TuiAction::Continue));
         assert_eq!(state.preview_mode(), PreviewMode::Timeline);
+    }
+
+    #[test]
+    fn e_toggles_selected_row_expansion_when_search_is_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut parsed = crate::codex::parse_session_file(std::path::Path::new(
+            "tests/fixtures/session-a.jsonl",
+        ))
+        .unwrap();
+        parsed.source_path = temp.path().join("session-a.jsonl");
+        database.upsert_session(&parsed).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        let action = handle_key(
+            &database,
+            &mut state,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        )
+        .unwrap();
+
+        assert!(matches!(action, TuiAction::Continue));
+        assert_eq!(
+            state.expanded_session_id(),
+            Some(parsed.session_id.as_str())
+        );
     }
 }
