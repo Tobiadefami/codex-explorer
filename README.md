@@ -2,6 +2,10 @@
 
 Codex Explorer is a local Codex session manager. The `cx` command indexes `~/.codex/sessions/**/*.jsonl` so you can search, preview, and resume old Codex sessions without remembering the exact date.
 
+Codex Explorer is early, work-in-progress software. It is useful today, but the data model and interface are still evolving.
+
+Codex Explorer is an independent project and is not affiliated with, endorsed by, or sponsored by OpenAI.
+
 ## Requirements
 
 - Rust and Cargo
@@ -63,7 +67,7 @@ TUI keys:
 
 `cx` stores its search index in your platform data directory under `cx/index.sqlite`. On Linux this is typically `~/.local/share/cx/index.sqlite`.
 
-The index is local SQLite data. It contains session metadata, source file paths, titles, searchable text, and full user/assistant message text so `cx show`, search, and previews work without reparsing every JSONL file each time. Use `--db <PATH>` to write the index somewhere else.
+The index is local SQLite data. It contains session metadata, source file paths, titles, searchable text, and full user/assistant message text so `cx show`, search, and previews work without reparsing every JSONL file each time. Treat this index as private local data, because Codex sessions may contain prompts, code, file paths, command output, and other sensitive project context. Use `--db <PATH>` to write the index somewhere else.
 
 `cx` reads Codex session files from `~/.codex/sessions` by default. Use `--sessions-dir <PATH>` to index a different directory.
 
