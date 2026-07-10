@@ -257,6 +257,18 @@ mod tests {
     fn alt_navigation_commands_move_selection_and_preview() {
         let temp = tempfile::tempdir().unwrap();
         let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut first_session = crate::codex::parse_session_file(std::path::Path::new(
+            "tests/fixtures/session-a.jsonl",
+        ))
+        .unwrap();
+        first_session.source_path = temp.path().join("session-a.jsonl");
+        database.upsert_session(&first_session).unwrap();
+        let mut second_session = crate::codex::parse_session_file(std::path::Path::new(
+            "tests/fixtures/session-overview-ui.jsonl",
+        ))
+        .unwrap();
+        second_session.source_path = temp.path().join("session-overview-ui.jsonl");
+        database.upsert_session(&second_session).unwrap();
         let mut state = TuiState::load(&database, 20).unwrap();
 
         let down_action = press_character(&database, &mut state, 'd', KeyModifiers::ALT);
@@ -267,14 +279,15 @@ mod tests {
         assert!(matches!(up_action, TuiAction::Continue));
         assert_eq!(state.preview_scroll(), 0);
 
-        assert!(matches!(
-            press_character(&database, &mut state, 'j', KeyModifiers::ALT),
-            TuiAction::Continue
-        ));
-        assert!(matches!(
-            press_character(&database, &mut state, 'k', KeyModifiers::ALT),
-            TuiAction::Continue
-        ));
+        assert_eq!(state.selected_index(), Some(0));
+        let next_session_action = press_character(&database, &mut state, 'j', KeyModifiers::ALT);
+        assert!(matches!(next_session_action, TuiAction::Continue));
+        assert_eq!(state.selected_index(), Some(1));
+
+        let previous_session_action =
+            press_character(&database, &mut state, 'k', KeyModifiers::ALT);
+        assert!(matches!(previous_session_action, TuiAction::Continue));
+        assert_eq!(state.selected_index(), Some(0));
     }
 
     #[test]
