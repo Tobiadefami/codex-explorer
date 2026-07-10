@@ -361,6 +361,17 @@ fn reindex_retains_subagent_threads_outside_top_level_sessions() {
         Some("11111111-1111-4111-8111-111111111111")
     );
     assert_eq!(child.summary.thread_source.as_deref(), Some("subagent"));
+    assert_eq!(child.summary.agent_nickname.as_deref(), Some("Reviewer"));
+    assert_eq!(child.summary.agent_role.as_deref(), Some("default"));
+    let parent = database
+        .get_session("11111111-1111-4111-8111-111111111111")
+        .unwrap()
+        .unwrap();
+    assert_eq!(parent.child_sessions.len(), 1);
+    assert_eq!(
+        parent.child_sessions[0].session_id,
+        "33333333-3333-4333-8333-333333333333"
+    );
 
     assert_eq!(
         database
