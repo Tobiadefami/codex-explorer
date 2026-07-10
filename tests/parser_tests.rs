@@ -146,7 +146,8 @@ fn parses_thread_source_for_subagent_sessions() {
         Some("11111111-1111-4111-8111-111111111111")
     );
     assert_eq!(parsed.thread_source.as_deref(), Some("subagent"));
-    assert!(parsed.is_subagent_thread());
+    assert_eq!(parsed.agent_nickname.as_deref(), Some("Reviewer"));
+    assert_eq!(parsed.agent_role.as_deref(), Some("default"));
 }
 
 #[test]

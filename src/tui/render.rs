@@ -14,9 +14,9 @@ use crate::{
 
 use super::{
     format::{
-        compact_path, compact_timestamp, conversation_windows, empty_state_message,
-        group_tool_events, preview_text, session_overview_detail_rows, session_summary_text_lines,
-        short_session_id, visible_tool_events,
+        agent_activity_text_lines, compact_path, compact_timestamp, conversation_windows,
+        empty_state_message, group_tool_events, preview_text, session_overview_detail_rows,
+        session_summary_text_lines, short_session_id, visible_tool_events,
     },
     refresh::RefreshStatus,
     state::{PreviewMode, TuiState},
@@ -310,13 +310,25 @@ fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
         Line::from(""),
         section_label("Last Assistant Response"),
         message_or_empty(latest_assistant_message(detail)),
-        Line::from(""),
-        section_label("Session Details"),
     ];
+    append_agent_activity(&mut lines, detail);
+    lines.push(Line::from(""));
+    lines.push(section_label("Session Details"));
     append_overview_detail_rows(&mut lines, detail);
 
     add_action_lines(&mut lines, detail);
     lines
+}
+
+fn append_agent_activity(lines: &mut Vec<Line<'static>>, detail: &SessionDetail) {
+    let activity_lines = agent_activity_text_lines(&detail.child_sessions);
+    if activity_lines.is_empty() {
+        return;
+    }
+
+    lines.push(Line::from(""));
+    lines.push(section_label("Agent Activity"));
+    lines.extend(activity_lines.into_iter().map(Line::from));
 }
 
 fn append_overview_detail_rows(lines: &mut Vec<Line<'static>>, detail: &SessionDetail) {

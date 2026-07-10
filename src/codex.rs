@@ -18,6 +18,8 @@ pub struct ParsedSession {
     pub git_branch: Option<String>,
     pub parent_thread_id: Option<String>,
     pub thread_source: Option<String>,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
     pub source_path: PathBuf,
     pub modified_unix_seconds: i64,
     pub title: String,
@@ -29,12 +31,6 @@ pub struct ParsedSession {
     pub tool_events: Vec<ParsedToolEvent>,
     pub searchable_text: String,
     pub malformed_records: usize,
-}
-
-impl ParsedSession {
-    pub fn is_subagent_thread(&self) -> bool {
-        self.thread_source.as_deref() == Some("subagent")
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +68,8 @@ pub struct ParsedSessionMeta {
     pub git_branch: Option<String>,
     pub parent_thread_id: Option<String>,
     pub thread_source: Option<String>,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +138,8 @@ fn derive_session_from_items(
     let mut git_branch = None;
     let mut parent_thread_id = None;
     let mut thread_source = None;
+    let mut agent_nickname = None;
+    let mut agent_role = None;
     let mut messages = Vec::new();
     let mut tool_events = Vec::new();
     let mut last_activity_at = String::new();
@@ -157,6 +157,8 @@ fn derive_session_from_items(
                 git_branch = meta.git_branch.clone();
                 parent_thread_id = meta.parent_thread_id.clone();
                 thread_source = meta.thread_source.clone();
+                agent_nickname = meta.agent_nickname.clone();
+                agent_role = meta.agent_role.clone();
             }
             ParsedSessionItemKind::ToolEvent(tool_event) => {
                 update_last_activity(&mut last_activity_at, &tool_event.timestamp);
@@ -212,6 +214,8 @@ fn derive_session_from_items(
         git_branch,
         parent_thread_id,
         thread_source,
+        agent_nickname,
+        agent_role,
         source_path: path.to_path_buf(),
         modified_unix_seconds,
         title,
@@ -265,7 +269,21 @@ fn parse_session_meta(timestamp: &str, payload: &Value) -> ParsedSessionMeta {
             .and_then(|git| string_field(git, "branch")),
         parent_thread_id: string_field(payload, "parent_thread_id"),
         thread_source: string_field(payload, "thread_source"),
+        agent_nickname: string_field(payload, "agent_nickname")
+            .or_else(|| nested_spawn_string(payload, "agent_nickname")),
+        agent_role: string_field(payload, "agent_role")
+            .or_else(|| nested_spawn_string(payload, "agent_role")),
     }
+}
+
+fn nested_spawn_string(payload: &Value, field: &str) -> Option<String> {
+    payload
+        .get("source")?
+        .get("subagent")?
+        .get("thread_spawn")?
+        .get(field)?
+        .as_str()
+        .map(ToOwned::to_owned)
 }
 
 fn unknown_session_item(record_type: String, payload: Value) -> ParsedSessionItemKind {

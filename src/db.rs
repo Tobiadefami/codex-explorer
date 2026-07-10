@@ -19,11 +19,17 @@ pub struct SessionSummary {
     pub latest_user_message: Option<String>,
     pub latest_assistant_message: Option<String>,
     pub source_path: String,
+    pub parent_thread_id: Option<String>,
+    pub thread_source: Option<String>,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
+    pub child_session_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionDetail {
     pub summary: SessionSummary,
+    pub child_sessions: Vec<SessionSummary>,
     pub items: Vec<ParsedSessionItem>,
     pub messages: Vec<ParsedMessage>,
     pub tool_events: Vec<ParsedToolEvent>,
@@ -67,6 +73,10 @@ impl Database {
                 last_activity_at TEXT NOT NULL DEFAULT '',
                 latest_user_message TEXT,
                 latest_assistant_message TEXT,
+                parent_thread_id TEXT,
+                thread_source TEXT,
+                agent_nickname TEXT,
+                agent_role TEXT,
                 searchable_text TEXT NOT NULL
             );
 
@@ -134,6 +144,14 @@ impl Database {
         self.add_column_if_missing("sessions", "latest_user_message", "TEXT")?;
         self.add_column_if_missing("sessions", "latest_assistant_message", "TEXT")?;
         self.add_column_if_missing("sessions", "git_branch", "TEXT")?;
+        self.add_column_if_missing("sessions", "parent_thread_id", "TEXT")?;
+        self.add_column_if_missing("sessions", "thread_source", "TEXT")?;
+        self.add_column_if_missing("sessions", "agent_nickname", "TEXT")?;
+        self.add_column_if_missing("sessions", "agent_role", "TEXT")?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS sessions_parent_thread_id_idx ON sessions(parent_thread_id)",
+            [],
+        )?;
         self.add_column_if_missing("tool_events", "call_id", "TEXT")?;
         self.add_column_if_missing("tool_events", "exit_code", "INTEGER")?;
         self.add_column_if_missing("tool_events", "duration_ms", "INTEGER")?;
@@ -207,9 +225,10 @@ impl Database {
             INSERT INTO sessions (
                 session_id, started_at, cwd, cli_version, model_provider,
                 source_path, modified_unix_seconds, title, last_activity_at,
-                latest_user_message, latest_assistant_message, git_branch, searchable_text
+                latest_user_message, latest_assistant_message, git_branch, thread_source,
+                parent_thread_id, agent_nickname, agent_role, searchable_text
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ON CONFLICT(session_id) DO UPDATE SET
                 started_at = excluded.started_at,
                 cwd = excluded.cwd,
@@ -222,6 +241,10 @@ impl Database {
                 latest_user_message = excluded.latest_user_message,
                 latest_assistant_message = excluded.latest_assistant_message,
                 git_branch = excluded.git_branch,
+                thread_source = excluded.thread_source,
+                parent_thread_id = excluded.parent_thread_id,
+                agent_nickname = excluded.agent_nickname,
+                agent_role = excluded.agent_role,
                 searchable_text = excluded.searchable_text
             "#,
             params![
@@ -237,6 +260,10 @@ impl Database {
                 session.latest_user_message,
                 session.latest_assistant_message,
                 session.git_branch,
+                session.thread_source,
+                session.parent_thread_id,
+                session.agent_nickname,
+                session.agent_role,
                 session.searchable_text,
             ],
         )?;
@@ -318,8 +345,12 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT session_id, started_at, last_activity_at, cwd, title,
-                   latest_user_message, latest_assistant_message, git_branch, source_path
+                   latest_user_message, latest_assistant_message, git_branch, source_path,
+                   parent_thread_id, thread_source, agent_nickname, agent_role,
+                   (SELECT COUNT(*) FROM sessions child
+                    WHERE child.parent_thread_id = sessions.session_id)
             FROM sessions
+            WHERE parent_thread_id IS NULL
             ORDER BY last_activity_at DESC, started_at DESC
             LIMIT ?1
             "#,
@@ -332,9 +363,12 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT session_id, started_at, last_activity_at, cwd, title,
-                   latest_user_message, latest_assistant_message, git_branch, source_path
+                   latest_user_message, latest_assistant_message, git_branch, source_path,
+                   parent_thread_id, thread_source, agent_nickname, agent_role,
+                   (SELECT COUNT(*) FROM sessions child
+                    WHERE child.parent_thread_id = sessions.session_id)
             FROM sessions
-            WHERE cwd = ?1
+            WHERE cwd = ?1 AND parent_thread_id IS NULL
             ORDER BY last_activity_at DESC, started_at DESC
             LIMIT ?2
             "#,
@@ -351,10 +385,14 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
-                   s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path
+                   s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path,
+                   s.parent_thread_id, s.thread_source, s.agent_nickname, s.agent_role,
+                   (SELECT COUNT(*) FROM sessions child
+                    WHERE child.parent_thread_id = s.session_id)
             FROM session_fts f
             JOIN sessions s ON s.session_id = f.session_id
             WHERE session_fts MATCH ?1
+              AND s.parent_thread_id IS NULL
             ORDER BY rank
             LIMIT ?2
             "#,
@@ -376,10 +414,15 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"
             SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
-                   s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path
+                   s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path,
+                   s.parent_thread_id, s.thread_source, s.agent_nickname, s.agent_role,
+                   (SELECT COUNT(*) FROM sessions child
+                    WHERE child.parent_thread_id = s.session_id)
             FROM session_fts f
             JOIN sessions s ON s.session_id = f.session_id
-            WHERE session_fts MATCH ?1 AND s.cwd = ?2
+            WHERE session_fts MATCH ?1
+              AND s.cwd = ?2
+              AND s.parent_thread_id IS NULL
             ORDER BY rank
             LIMIT ?3
             "#,
@@ -393,7 +436,10 @@ impl Database {
             let mut statement = self.conn.prepare(
                 r#"
                 SELECT session_id, started_at, last_activity_at, cwd, title,
-                       latest_user_message, latest_assistant_message, git_branch, source_path
+                       latest_user_message, latest_assistant_message, git_branch, source_path,
+                       parent_thread_id, thread_source, agent_nickname, agent_role,
+                       (SELECT COUNT(*) FROM sessions child
+                        WHERE child.parent_thread_id = sessions.session_id)
                 FROM sessions
                 WHERE session_id = ?1
                 "#,
@@ -407,6 +453,24 @@ impl Database {
 
         let Some(summary) = summary else {
             return Ok(None);
+        };
+
+        let child_sessions = {
+            let mut statement = self.conn.prepare(
+                r#"
+                SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
+                       s.latest_user_message, s.latest_assistant_message, s.git_branch,
+                       s.source_path, s.parent_thread_id, s.thread_source,
+                       s.agent_nickname, s.agent_role,
+                       (SELECT COUNT(*) FROM sessions child
+                        WHERE child.parent_thread_id = s.session_id)
+                FROM sessions s
+                WHERE s.parent_thread_id = ?1
+                ORDER BY s.last_activity_at ASC, s.started_at ASC
+                "#,
+            )?;
+            let rows = statement.query_map(params![session_id], summary_from_row)?;
+            rows_to_summaries(rows)?
         };
 
         let mut statement = self.conn.prepare(
@@ -469,6 +533,7 @@ impl Database {
 
         Ok(Some(SessionDetail {
             summary,
+            child_sessions,
             items,
             messages,
             tool_events,
@@ -557,42 +622,6 @@ impl Database {
         }
     }
 
-    pub fn delete_source_path(&self, source_path: &Path) -> Result<usize> {
-        let source_path = source_path.display().to_string();
-        let session_ids = {
-            let mut statement = self
-                .conn
-                .prepare("SELECT session_id FROM sessions WHERE source_path = ?1")?;
-            let session_ids = statement
-                .query_map(params![source_path], |row| row.get(0))?
-                .collect::<rusqlite::Result<Vec<String>>>()?;
-            session_ids
-        };
-
-        if session_ids.is_empty() {
-            return Ok(0);
-        }
-
-        let tx = self.conn.unchecked_transaction()?;
-        for session_id in &session_ids {
-            tx.execute(
-                "DELETE FROM session_audits WHERE session_id = ?1",
-                params![session_id],
-            )?;
-            tx.execute(
-                "DELETE FROM session_fts WHERE session_id = ?1",
-                params![session_id],
-            )?;
-            tx.execute(
-                "DELETE FROM sessions WHERE session_id = ?1",
-                params![session_id],
-            )?;
-        }
-        tx.commit()?;
-
-        Ok(session_ids.len())
-    }
-
     pub fn prune_missing_source_paths(
         &self,
         source_root: &Path,
@@ -674,6 +703,11 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary>
         latest_assistant_message: row.get(6)?,
         git_branch: row.get(7)?,
         source_path: row.get(8)?,
+        parent_thread_id: row.get(9)?,
+        thread_source: row.get(10)?,
+        agent_nickname: row.get(11)?,
+        agent_role: row.get(12)?,
+        child_session_count: row.get::<_, i64>(13)? as usize,
     })
 }
 

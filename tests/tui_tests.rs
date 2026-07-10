@@ -17,8 +17,8 @@ mod tui;
 
 use db::Database;
 use tui::format::{
-    compact_path, compact_timestamp, conversation_windows, empty_results_message,
-    empty_state_message, group_tool_events, session_overview_detail_rows,
+    agent_activity_text_lines, compact_path, compact_timestamp, conversation_windows,
+    empty_results_message, empty_state_message, group_tool_events, session_overview_detail_rows,
     session_summary_text_lines, short_session_id, visible_tool_events,
 };
 use tui::refresh::RefreshStatus;
@@ -238,6 +238,57 @@ fn expanded_session_summary_lines_focus_on_branch_activity_and_messages() {
     assert!(lines[2].contains("User: add turnstile to the signup form"));
     assert!(lines[3].contains("Assistant: I will inspect the Worker and form code."));
     assert_eq!(lines.len(), 4);
+}
+
+#[test]
+fn expanded_parent_summary_includes_agent_count() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-subagent.jsonl",
+        sessions_dir.join("session-subagent.jsonl"),
+    )
+    .unwrap();
+    let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+    indexer::reindex(&database, &sessions_dir).unwrap();
+    let parent = database.list_sessions(10).unwrap().remove(0);
+
+    let lines = session_summary_text_lines(&parent, true);
+
+    assert!(lines[1].contains("↳ 1 agent"));
+}
+
+#[test]
+fn agent_activity_lines_identify_child_task_and_role() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-subagent.jsonl",
+        sessions_dir.join("session-subagent.jsonl"),
+    )
+    .unwrap();
+    let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+    indexer::reindex(&database, &sessions_dir).unwrap();
+    let parent = database
+        .get_session("11111111-1111-4111-8111-111111111111")
+        .unwrap()
+        .unwrap();
+
+    let lines = agent_activity_text_lines(&parent.child_sessions);
+
+    assert_eq!(lines, vec!["Reviewer · default: review the implementation"]);
 }
 
 #[test]

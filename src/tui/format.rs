@@ -96,6 +96,24 @@ pub fn session_overview_detail_rows(summary: &SessionSummary) -> Vec<OverviewDet
     rows
 }
 
+pub fn agent_activity_text_lines(children: &[SessionSummary]) -> Vec<String> {
+    children
+        .iter()
+        .enumerate()
+        .map(|(index, child)| {
+            let name = child
+                .agent_nickname
+                .clone()
+                .unwrap_or_else(|| format!("Agent {}", index + 1));
+            let identity = match child.agent_role.as_deref() {
+                Some(role) if !role.trim().is_empty() => format!("{name} · {role}"),
+                _ => name,
+            };
+            format!("{identity}: {}", preview_text(&child.title))
+        })
+        .collect()
+}
+
 pub fn short_session_id(session_id: &str) -> String {
     if session_id.len() <= 16 {
         return session_id.to_string();
@@ -307,6 +325,14 @@ fn session_summary_metadata(summary: &SessionSummary) -> String {
         "{ICON_UPDATED} {}",
         compact_timestamp(&summary.last_activity_at)
     ));
+    if summary.child_session_count > 0 {
+        let noun = if summary.child_session_count == 1 {
+            "agent"
+        } else {
+            "agents"
+        };
+        parts.push(format!("↳ {} {noun}", summary.child_session_count));
+    }
     parts.join("  ")
 }
 

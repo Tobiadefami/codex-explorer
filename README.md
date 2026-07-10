@@ -52,6 +52,8 @@ cx resume <session-id>
 
 Run `cx` without a command to open the terminal session browser. The browser opens immediately with cached sessions and refreshes the index in the background.
 
+Codex subagent threads are retained in the local index and linked to their parent session. They stay out of the top-level session list, while expanded parent rows show how many agents participated and the Overview identifies each agent's task.
+
 TUI keys:
 
 - type to search
