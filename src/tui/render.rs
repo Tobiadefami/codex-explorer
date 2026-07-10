@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::{
+    audit::SessionAuditRecord,
     codex::{ParsedSessionItem, ParsedSessionItemKind},
     db::{SessionDetail, SessionSummary},
 };
@@ -19,6 +20,7 @@ use super::{
     },
     refresh::RefreshStatus,
     state::{PreviewMode, TuiState},
+    AuditRunStatus,
 };
 
 pub(super) fn render(
@@ -26,6 +28,8 @@ pub(super) fn render(
     state: &TuiState,
     refresh_status: &RefreshStatus,
     preview: Option<&SessionDetail>,
+    audit: Option<&SessionAuditRecord>,
+    audit_status: &AuditRunStatus,
 ) {
     let page_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -39,7 +43,15 @@ pub(super) fn render(
 
     render_header(frame, page_chunks[0], state, refresh_status);
     render_search(frame, page_chunks[1], state);
-    render_body(frame, page_chunks[2], state, refresh_status, preview);
+    render_body(
+        frame,
+        page_chunks[2],
+        state,
+        refresh_status,
+        preview,
+        audit,
+        audit_status,
+    );
     render_help(frame, page_chunks[3]);
 }
 
@@ -95,6 +107,8 @@ fn render_body(
     state: &TuiState,
     refresh_status: &RefreshStatus,
     preview: Option<&SessionDetail>,
+    audit: Option<&SessionAuditRecord>,
+    audit_status: &AuditRunStatus,
 ) {
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -102,7 +116,15 @@ fn render_body(
         .split(area);
 
     render_session_list(frame, body_chunks[0], state, refresh_status);
-    render_preview(frame, body_chunks[1], state, refresh_status, preview);
+    render_preview(
+        frame,
+        body_chunks[1],
+        state,
+        refresh_status,
+        preview,
+        audit,
+        audit_status,
+    );
 }
 
 fn render_session_list(
@@ -170,9 +192,11 @@ fn render_preview(
     state: &TuiState,
     refresh_status: &RefreshStatus,
     preview: Option<&SessionDetail>,
+    audit: Option<&SessionAuditRecord>,
+    audit_status: &AuditRunStatus,
 ) {
     let lines = match preview {
-        Some(detail) => preview_lines(state.preview_mode(), detail),
+        Some(detail) => preview_lines(state.preview_mode(), detail, audit, audit_status),
         None => vec![Line::from(Span::styled(
             empty_state_message(state.query(), refresh_status),
             secondary_style(),
@@ -192,7 +216,7 @@ fn render_preview(
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type search | e expand | r reindex | 1 overview | 2 conversation | 3 tools | 4 timeline | a all | p project | Enter resume | Esc quit",
+        "Type search | i run audit | e expand | r reindex | 1 overview | 2 conversation | 3 tools | 4 timeline | 5 audit | a all | p project | Enter resume | Esc quit",
     )
     .style(secondary_style());
     frame.render_widget(help, area);
@@ -202,13 +226,73 @@ fn scope_note_label(state: &TuiState) -> String {
     state.scope_note().unwrap_or("").to_string()
 }
 
-fn preview_lines(preview_mode: PreviewMode, detail: &SessionDetail) -> Vec<Line<'static>> {
+fn preview_lines(
+    preview_mode: PreviewMode,
+    detail: &SessionDetail,
+    audit: Option<&SessionAuditRecord>,
+    audit_status: &AuditRunStatus,
+) -> Vec<Line<'static>> {
     match preview_mode {
         PreviewMode::Overview => overview_lines(detail),
         PreviewMode::Conversation => conversation_lines(detail),
         PreviewMode::Tools => tool_lines(detail),
         PreviewMode::Timeline => timeline_lines(detail),
+        PreviewMode::Audit => audit_lines(detail, audit, audit_status),
     }
+}
+
+fn audit_lines(
+    detail: &SessionDetail,
+    audit: Option<&SessionAuditRecord>,
+    audit_status: &AuditRunStatus,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![section_label("Audit")];
+    if let Some(status_label) = audit_status.label_for(&detail.summary.session_id) {
+        lines.push(Line::from(Span::styled(status_label, secondary_style())));
+        lines.push(Line::from(""));
+    }
+
+    let Some(audit) = audit else {
+        lines.push(Line::from(Span::styled(
+            "No cached audit for this session.",
+            secondary_style(),
+        )));
+        lines.push(Line::from("Press i to run an audit."));
+        return lines;
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("Status: ", label_style()),
+        Span::raw(audit.result.status.as_str().to_string()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Gist: ", label_style()),
+        Span::raw(audit.result.gist.clone()),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(section_label("Hinge"));
+    lines.push(Line::from(audit.result.hinge.clone()));
+    lines.push(Line::from(""));
+    lines.push(section_label("Next"));
+    lines.push(Line::from(audit.result.next.clone()));
+    lines.push(Line::from(""));
+    lines.push(section_label("Signals"));
+    for signal in &audit.result.signals {
+        lines.push(Line::from(format!("- {signal}")));
+    }
+    lines.push(Line::from(""));
+    lines.push(section_label("Run"));
+    lines.push(Line::from(vec![
+        Span::styled("Model: ", label_style()),
+        Span::raw(audit.model.clone()),
+        Span::styled("  Reasoning: ", label_style()),
+        Span::raw(audit.reasoning_effort.clone()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Created: ", label_style()),
+        Span::raw(audit.created_at.clone()),
+    ]));
+    lines
 }
 
 fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {

@@ -1,3 +1,4 @@
+mod audit;
 mod cli;
 mod codex;
 mod codex_cmd;
@@ -10,8 +11,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
+use crate::audit::{format_audit_input, SessionAuditRecord};
 use crate::cli::{Cli, Commands};
-use crate::db::{Database, SessionSummary};
+use crate::db::{Database, SessionDetail, SessionSummary};
+use crate::tui::TuiExit;
 
 fn main() -> Result<()> {
     let Cli {
@@ -70,6 +73,22 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some(Commands::Audit {
+            refresh,
+            print_input,
+            model,
+            reasoning_effort,
+            session_id,
+        }) => {
+            let database = open_database(db)?;
+            let detail = get_existing_session(&database, &session_id)?;
+            if print_input {
+                println!("{}", format_audit_input(&detail));
+                return Ok(());
+            }
+
+            audit_session(&database, &session_id, refresh, &model, &reasoning_effort)?;
+        }
         Some(Commands::Resume { session_id }) => {
             let command = codex_cmd::resume_command(&session_id);
             let code = codex_cmd::run(command)?;
@@ -81,14 +100,37 @@ fn main() -> Result<()> {
             let current_dir =
                 std::env::current_dir().context("could not resolve current directory")?;
             let database = Database::open(&db_path)?;
-            if let Some(session_id) = tui::run(&database, db_path, sessions_dir, current_dir)? {
-                let command = codex_cmd::resume_command(&session_id);
-                let code = codex_cmd::run(command)?;
-                std::process::exit(code);
+            if let Some(exit) = tui::run(&database, db_path, sessions_dir, current_dir)? {
+                match exit {
+                    TuiExit::Resume(session_id) => {
+                        let command = codex_cmd::resume_command(&session_id);
+                        let code = codex_cmd::run(command)?;
+                        std::process::exit(code);
+                    }
+                }
             }
         }
     }
 
+    Ok(())
+}
+
+fn get_existing_session(database: &Database, session_id: &str) -> Result<SessionDetail> {
+    database
+        .get_session(session_id)?
+        .with_context(|| format!("session not found: {session_id}"))
+}
+
+fn audit_session(
+    database: &Database,
+    session_id: &str,
+    refresh: bool,
+    model: &str,
+    reasoning_effort: &str,
+) -> Result<()> {
+    let detail = get_existing_session(database, session_id)?;
+    let audit = audit::audit_session(database, &detail, refresh, model, reasoning_effort)?;
+    print_audit(&audit);
     Ok(())
 }
 
@@ -126,5 +168,18 @@ fn print_summaries(summaries: Vec<SessionSummary>) {
             "{}  {}  {}  {}",
             summary.started_at, summary.session_id, summary.cwd, summary.title
         );
+    }
+}
+
+fn print_audit(audit: &SessionAuditRecord) {
+    println!("status: {}", audit.result.status.as_str());
+    println!("gist: {}", audit.result.gist);
+    println!("hinge: {}", audit.result.hinge);
+    println!("next: {}", audit.result.next);
+    println!("audited_with: {} ({})", audit.model, audit.reasoning_effort);
+    println!("created_at: {}", audit.created_at);
+    println!("signals:");
+    for signal in &audit.result.signals {
+        println!("- {signal}");
     }
 }

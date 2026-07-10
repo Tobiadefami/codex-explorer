@@ -106,6 +106,6 @@ pub(super) fn apply_refresh_results(
     Ok(())
 }
 
-fn short_error_message(message: &str) -> String {
+pub(super) fn short_error_message(message: &str) -> String {
     trim_to_chars(message, 96)
 }

@@ -33,6 +33,36 @@ fn builds_codex_resume_command() {
 }
 
 #[test]
+fn builds_codex_audit_command_with_cost_conscious_defaults() {
+    let command = codex_cmd::audit_command(
+        "/tmp/cx-audit-schema.json",
+        "gpt-5.6-luna",
+        "low",
+        "audit prompt",
+    );
+
+    assert_eq!(command.program, "codex");
+    assert_eq!(
+        command.args,
+        vec![
+            "exec",
+            "--ephemeral",
+            "--sandbox",
+            "read-only",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "-m",
+            "gpt-5.6-luna",
+            "-c",
+            "model_reasoning_effort=\"low\"",
+            "--output-schema",
+            "/tmp/cx-audit-schema.json",
+            "audit prompt",
+        ]
+    );
+}
+
+#[test]
 fn help_mentions_default_tui_workflow() {
     Command::cargo_bin("cx")
         .unwrap()
@@ -145,6 +175,44 @@ fn show_displays_session_preview() {
         .stdout(predicate::str::contains(
             "assistant: I will inspect the Worker and form code.",
         ));
+}
+
+#[test]
+fn audit_print_input_outputs_compact_transcript_without_running_codex() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("index.sqlite");
+    let sessions_dir = fixture_sessions_dir(&temp);
+
+    Command::cargo_bin("cx")
+        .unwrap()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "reindex",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("cx")
+        .unwrap()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "audit",
+            "--print-input",
+            "11111111-1111-4111-8111-111111111111",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("AUDIT_INPUT_VERSION: 1"))
+        .stdout(predicate::str::contains("CONVERSATION"))
+        .stdout(predicate::str::contains(
+            "[user] add turnstile to the signup form",
+        ))
+        .stdout(predicate::str::contains("raw JSONL omitted"))
+        .stdout(predicate::str::contains("\"payload\"").not());
 }
 
 #[test]

@@ -33,6 +33,17 @@ pub enum Commands {
     Show {
         session_id: String,
     },
+    Audit {
+        #[arg(long)]
+        refresh: bool,
+        #[arg(long)]
+        print_input: bool,
+        #[arg(long, default_value = "gpt-5.6-luna")]
+        model: String,
+        #[arg(long, default_value = "low")]
+        reasoning_effort: String,
+        session_id: String,
+    },
     Resume {
         session_id: String,
     },

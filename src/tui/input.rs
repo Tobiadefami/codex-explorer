@@ -9,6 +9,7 @@ pub(super) enum TuiAction {
     Continue,
     Quit,
     Refresh,
+    Audit(String),
     Resume(String),
 }
 
@@ -62,6 +63,10 @@ pub(super) fn handle_key(
             Ok(TuiAction::Continue)
         }
         KeyCode::Char('r') if state.query().is_empty() => Ok(TuiAction::Refresh),
+        KeyCode::Char('i') if state.query().is_empty() => Ok(state
+            .selected_session_id()
+            .map(|session_id| TuiAction::Audit(session_id.to_string()))
+            .unwrap_or(TuiAction::Continue)),
         KeyCode::Char('e') if state.query().is_empty() => {
             state.toggle_selected_expansion();
             Ok(TuiAction::Continue)
@@ -80,6 +85,10 @@ pub(super) fn handle_key(
         }
         KeyCode::Char('4') if state.query().is_empty() => {
             state.set_preview_mode(PreviewMode::Timeline);
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::Char('5') if state.query().is_empty() => {
+            state.set_preview_mode(PreviewMode::Audit);
             Ok(TuiAction::Continue)
         }
         KeyCode::Char('d') if state.query().is_empty() => {
@@ -147,6 +156,23 @@ mod tests {
     }
 
     #[test]
+    fn five_switches_to_audit_preview_mode() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        let action = handle_key(
+            &database,
+            &mut state,
+            KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
+        )
+        .unwrap();
+
+        assert!(matches!(action, TuiAction::Continue));
+        assert_eq!(state.preview_mode(), PreviewMode::Audit);
+    }
+
+    #[test]
     fn e_toggles_selected_row_expansion_when_search_is_empty() {
         let temp = tempfile::tempdir().unwrap();
         let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
@@ -170,5 +196,31 @@ mod tests {
             state.expanded_session_id(),
             Some(parsed.session_id.as_str())
         );
+    }
+
+    #[test]
+    fn i_requests_audit_for_selected_session_when_search_is_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut parsed = crate::codex::parse_session_file(std::path::Path::new(
+            "tests/fixtures/session-a.jsonl",
+        ))
+        .unwrap();
+        parsed.source_path = temp.path().join("session-a.jsonl");
+        database.upsert_session(&parsed).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        let action = handle_key(
+            &database,
+            &mut state,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            action,
+            TuiAction::Audit(ref session_id)
+                if session_id == "11111111-1111-4111-8111-111111111111"
+        ));
     }
 }

@@ -1,5 +1,12 @@
+#[allow(dead_code)]
+#[path = "../src/audit.rs"]
+mod audit;
 #[path = "../src/codex.rs"]
 mod codex;
+#[allow(dead_code)]
+#[path = "../src/codex_cmd.rs"]
+mod codex_cmd;
+#[allow(dead_code)]
 #[path = "../src/db.rs"]
 mod db;
 #[path = "../src/indexer.rs"]
