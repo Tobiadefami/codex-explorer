@@ -121,55 +121,59 @@ pub(super) fn handle_key(
 mod tests {
     use super::*;
 
-    #[test]
-    fn r_requests_refresh_when_search_is_empty() {
-        let temp = tempfile::tempdir().unwrap();
-        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
-        let mut state = TuiState::load(&database, 20).unwrap();
-
-        let action = handle_key(
-            &database,
-            &mut state,
-            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    fn press_character(
+        database: &Database,
+        state: &mut TuiState,
+        character: char,
+        modifiers: KeyModifiers,
+    ) -> TuiAction {
+        handle_key(
+            database,
+            state,
+            KeyEvent::new(KeyCode::Char(character), modifiers),
         )
-        .unwrap();
-
-        assert!(matches!(action, TuiAction::Refresh));
-        assert_eq!(state.query(), "");
+        .unwrap()
     }
 
     #[test]
-    fn number_keys_switch_preview_modes() {
+    fn plain_printable_keys_always_append_to_search() {
         let temp = tempfile::tempdir().unwrap();
         let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
         let mut state = TuiState::load(&database, 20).unwrap();
 
-        let action = handle_key(
-            &database,
-            &mut state,
-            KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE),
-        )
-        .unwrap();
+        for character in "apple".chars() {
+            assert!(matches!(
+                press_character(&database, &mut state, character, KeyModifiers::NONE),
+                TuiAction::Continue
+            ));
+        }
 
-        assert!(matches!(action, TuiAction::Continue));
-        assert_eq!(state.preview_mode(), PreviewMode::Timeline);
+        assert_eq!(state.query(), "apple");
     }
 
     #[test]
-    fn five_switches_to_audit_preview_mode() {
+    fn plain_digit_starts_a_search_instead_of_switching_preview() {
         let temp = tempfile::tempdir().unwrap();
         let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
         let mut state = TuiState::load(&database, 20).unwrap();
 
-        let action = handle_key(
-            &database,
-            &mut state,
-            KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
-        )
-        .unwrap();
+        let action = press_character(&database, &mut state, '4', KeyModifiers::NONE);
 
         assert!(matches!(action, TuiAction::Continue));
-        assert_eq!(state.preview_mode(), PreviewMode::Audit);
+        assert_eq!(state.query(), "4");
+        assert_eq!(state.preview_mode(), PreviewMode::Overview);
+    }
+
+    #[test]
+    fn plain_q_is_search_input_instead_of_quit() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        let action = press_character(&database, &mut state, 'q', KeyModifiers::NONE);
+
+        assert!(matches!(action, TuiAction::Continue));
+        assert_eq!(state.query(), "q");
     }
 
     #[test]
