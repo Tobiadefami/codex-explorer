@@ -324,7 +324,7 @@ fn reindex_prunes_sessions_when_source_files_are_removed() {
 }
 
 #[test]
-fn reindex_excludes_subagent_threads_from_top_level_sessions() {
+fn reindex_retains_subagent_threads_outside_top_level_sessions() {
     let temp = tempfile::tempdir().unwrap();
     let sessions_dir = temp.path().join("sessions");
     std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -343,7 +343,7 @@ fn reindex_excludes_subagent_threads_from_top_level_sessions() {
     let report = indexer::reindex(&database, &sessions_dir).unwrap();
 
     assert_eq!(report.scanned_files, 2);
-    assert_eq!(report.indexed_sessions, 1);
+    assert_eq!(report.indexed_sessions, 2);
 
     let sessions = database.list_sessions(10).unwrap();
     assert_eq!(sessions.len(), 1);
@@ -351,30 +351,32 @@ fn reindex_excludes_subagent_threads_from_top_level_sessions() {
         sessions[0].session_id,
         "11111111-1111-4111-8111-111111111111"
     );
+    assert_eq!(sessions[0].child_session_count, 1);
+    let child = database
+        .get_session("33333333-3333-4333-8333-333333333333")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        child.summary.parent_thread_id.as_deref(),
+        Some("11111111-1111-4111-8111-111111111111")
+    );
+    assert_eq!(child.summary.thread_source.as_deref(), Some("subagent"));
+
+    assert_eq!(
+        database
+            .list_sessions_for_cwd("/work/project-a", 10)
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(database
         .search_sessions("review implementation", 10)
         .unwrap()
         .is_empty());
-}
-
-#[test]
-fn reindex_removes_previously_indexed_subagent_threads() {
-    let temp = tempfile::tempdir().unwrap();
-    let sessions_dir = temp.path().join("sessions");
-    let subagent_path = sessions_dir.join("session-subagent.jsonl");
-    std::fs::create_dir_all(&sessions_dir).unwrap();
-    std::fs::copy("tests/fixtures/session-subagent.jsonl", &subagent_path).unwrap();
-
-    let database = db::Database::open(&temp.path().join("index.sqlite")).unwrap();
-    let parsed_subagent = codex::parse_session_file(&subagent_path).unwrap();
-    database.upsert_session(&parsed_subagent).unwrap();
-    assert_eq!(database.list_sessions(10).unwrap().len(), 1);
-
-    let report = indexer::reindex(&database, &sessions_dir).unwrap();
-
-    assert_eq!(report.scanned_files, 1);
-    assert_eq!(report.indexed_sessions, 0);
-    assert!(database.list_sessions(10).unwrap().is_empty());
+    assert!(database
+        .search_sessions_for_cwd("/work/project-a", "review implementation", 10)
+        .unwrap()
+        .is_empty());
 }
 
 #[cfg(unix)]

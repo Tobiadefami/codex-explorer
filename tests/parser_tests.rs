@@ -146,7 +146,6 @@ fn parses_thread_source_for_subagent_sessions() {
         Some("11111111-1111-4111-8111-111111111111")
     );
     assert_eq!(parsed.thread_source.as_deref(), Some("subagent"));
-    assert!(parsed.is_subagent_thread());
 }
 
 #[test]

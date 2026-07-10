@@ -241,6 +241,30 @@ fn expanded_session_summary_lines_focus_on_branch_activity_and_messages() {
 }
 
 #[test]
+fn expanded_parent_summary_includes_agent_count() {
+    let temp = tempfile::tempdir().unwrap();
+    let sessions_dir = temp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-a.jsonl",
+        sessions_dir.join("session-a.jsonl"),
+    )
+    .unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-subagent.jsonl",
+        sessions_dir.join("session-subagent.jsonl"),
+    )
+    .unwrap();
+    let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+    indexer::reindex(&database, &sessions_dir).unwrap();
+    let parent = database.list_sessions(10).unwrap().remove(0);
+
+    let lines = session_summary_text_lines(&parent, true);
+
+    assert!(lines[1].contains("↳ 1 agent"));
+}
+
+#[test]
 fn overview_detail_rows_include_git_branch_when_present() {
     let temp = tempfile::tempdir().unwrap();
     let database = indexed_database(&temp);

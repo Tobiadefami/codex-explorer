@@ -307,6 +307,14 @@ fn session_summary_metadata(summary: &SessionSummary) -> String {
         "{ICON_UPDATED} {}",
         compact_timestamp(&summary.last_activity_at)
     ));
+    if summary.child_session_count > 0 {
+        let noun = if summary.child_session_count == 1 {
+            "agent"
+        } else {
+            "agents"
+        };
+        parts.push(format!("↳ {} {noun}", summary.child_session_count));
+    }
     parts.join("  ")
 }
 

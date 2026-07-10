@@ -31,12 +31,6 @@ pub struct ParsedSession {
     pub malformed_records: usize,
 }
 
-impl ParsedSession {
-    pub fn is_subagent_thread(&self) -> bool {
-        self.thread_source.as_deref() == Some("subagent")
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedMessage {
     pub timestamp: String,
