@@ -257,7 +257,7 @@ fn audit_lines(
             "No cached audit for this session.",
             secondary_style(),
         )));
-        lines.push(Line::from("Press i to run an audit."));
+        lines.push(Line::from("Press Alt+I to run an audit."));
         return lines;
     };
 

@@ -96,7 +96,7 @@ cx audit --print-input <session-id>
 
 Use `--print-input` to inspect the compact transcript without running Codex.
 
-In the TUI, press `5` to open the audit preview for the selected session. Press `i` to run or refresh that session's audit without leaving the TUI.
+In the TUI, press `Alt+5` to open the audit preview for the selected session. Press `Alt+I` to run or refresh that session's audit without leaving the TUI.
 
 ## Development
 
