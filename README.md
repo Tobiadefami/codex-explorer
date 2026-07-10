@@ -56,23 +56,24 @@ Codex subagent threads are retained in the local index and linked to their paren
 
 TUI keys:
 
-- type to search
+- unmodified printable keys type into search, including when the search box is empty
 - `Backspace` edits search
 - `Up`/`Down` moves selection
-- `a` shows all projects
-- `p` returns to the current directory
-- `r` refreshes the index
-- `e` expands or collapses the selected row
-- `i` runs or refreshes an audit for the selected session
-- `1` shows the overview preview
-- `2` shows the conversation preview
-- `3` shows tool activity
-- `4` shows the timeline
-- `5` shows the audit preview
-- `PgUp`/`PgDn` scrolls the preview
+- `Alt+A` shows all projects
+- `Alt+P` returns to the current directory
+- `Alt+R` refreshes the index
+- `Alt+E` expands or collapses the selected row
+- `Alt+I` runs or refreshes an audit for the selected session
+- `Alt+1` shows the overview preview
+- `Alt+2` shows the conversation preview
+- `Alt+3` shows tool activity
+- `Alt+4` shows the timeline
+- `Alt+5` shows the audit preview
+- `Alt+J`/`Alt+K` also moves selection
+- `Alt+D`/`Alt+U` scrolls the preview one line
+- `PgUp`/`PgDn` scrolls the preview by a page
 - `Enter` resumes the selected session
-- `Esc` quits
-- `q` quits when the search box is empty
+- `Esc`, `Ctrl+C`, or `Alt+Q` quits
 
 ## Local Data
 
@@ -95,7 +96,7 @@ cx audit --print-input <session-id>
 
 Use `--print-input` to inspect the compact transcript without running Codex.
 
-In the TUI, press `5` to open the audit preview for the selected session. Press `i` to run or refresh that session's audit without leaving the TUI.
+In the TUI, press `Alt+5` to open the audit preview for the selected session. Press `Alt+I` to run or refresh that session's audit without leaving the TUI.
 
 ## Development
 
