@@ -230,6 +230,29 @@ fn state_toggles_expansion_for_selected_session() {
 }
 
 #[test]
+fn agent_activity_expansion_is_independent_and_resets_on_selection_change() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    assert!(!state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+    state.toggle_selected_expansion();
+    state.toggle_selected_agent_activity();
+    assert!(state.is_summary_expanded(state.selected_summary().unwrap()));
+    assert!(state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+
+    state.toggle_selected_agent_activity();
+    assert!(state.is_summary_expanded(state.selected_summary().unwrap()));
+    assert!(!state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+
+    state.toggle_selected_agent_activity();
+    state.move_up();
+    assert!(state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+    state.move_down();
+    assert!(!state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+}
+
+#[test]
 fn reload_clears_stale_expanded_session() {
     let temp = tempfile::tempdir().unwrap();
     let database = indexed_database(&temp);
