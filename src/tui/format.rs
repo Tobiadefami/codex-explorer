@@ -96,8 +96,10 @@ pub fn session_overview_detail_rows(summary: &SessionSummary) -> Vec<OverviewDet
     rows
 }
 
-pub fn agent_activity_text_lines(children: &[SessionSummary]) -> Vec<String> {
-    children
+const COLLAPSED_AGENT_ACTIVITY_LIMIT: usize = 5;
+
+pub fn agent_activity_text_lines(children: &[SessionSummary], expanded: bool) -> Vec<String> {
+    let mut lines = children
         .iter()
         .filter_map(|child| {
             let task_name = child
@@ -119,7 +121,21 @@ pub fn agent_activity_text_lines(children: &[SessionSummary]) -> Vec<String> {
             };
             format!("{identity}: {}", preview_text(task_name))
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    if lines.len() <= COLLAPSED_AGENT_ACTIVITY_LIMIT {
+        return lines;
+    }
+
+    if expanded {
+        lines.push("Alt+G to show fewer".to_string());
+        return lines;
+    }
+
+    let hidden_count = lines.len() - COLLAPSED_AGENT_ACTIVITY_LIMIT;
+    lines.truncate(COLLAPSED_AGENT_ACTIVITY_LIMIT);
+    lines.push(format!("… {hidden_count} more agents — Alt+G to show all"));
+    lines
 }
 
 pub fn short_session_id(session_id: &str) -> String {

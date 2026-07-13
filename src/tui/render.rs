@@ -321,7 +321,7 @@ fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
 }
 
 fn append_agent_activity(lines: &mut Vec<Line<'static>>, detail: &SessionDetail) {
-    let activity_lines = agent_activity_text_lines(&detail.child_sessions);
+    let activity_lines = agent_activity_text_lines(&detail.child_sessions, false);
     if activity_lines.is_empty() {
         return;
     }
