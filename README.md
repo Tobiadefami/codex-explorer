@@ -64,11 +64,8 @@ TUI keys:
 - `Alt+R` refreshes the index
 - `Alt+E` expands or collapses the selected row
 - `Alt+I` runs or refreshes an audit for the selected session
-- `Alt+1` shows the overview preview
-- `Alt+2` shows the conversation preview
-- `Alt+3` shows tool activity
-- `Alt+4` shows the timeline
-- `Alt+5` shows the audit preview
+- `Tab` shows the next preview
+- `Shift+Tab` shows the previous preview
 - `Alt+J`/`Alt+K` also moves selection
 - `Alt+D`/`Alt+U` scrolls the preview one line
 - `PgUp`/`PgDn` scrolls the preview by a page
@@ -96,7 +93,7 @@ cx audit --print-input <session-id>
 
 Use `--print-input` to inspect the compact transcript without running Codex.
 
-In the TUI, press `Alt+5` to open the audit preview for the selected session. Press `Alt+I` to run or refresh that session's audit without leaving the TUI.
+In the TUI, press `Alt+I` to run or refresh an audit for the selected session and open its audit preview.
 
 ## Development
 
