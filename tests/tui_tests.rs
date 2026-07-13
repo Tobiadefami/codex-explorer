@@ -15,7 +15,7 @@ mod indexer;
 #[path = "../src/tui/mod.rs"]
 mod tui;
 
-use db::Database;
+use db::{Database, SessionSummary};
 use tui::format::{
     agent_activity_text_lines, compact_path, compact_timestamp, conversation_windows,
     empty_results_message, empty_state_message, group_tool_events, session_overview_detail_rows,
@@ -62,6 +62,32 @@ fn scoped_database(temp: &tempfile::TempDir) -> Database {
     database.upsert_session(&second).unwrap();
 
     database
+}
+
+fn agent_summary(index: usize, agent_path: Option<String>) -> SessionSummary {
+    SessionSummary {
+        session_id: format!("agent-{index}"),
+        started_at: String::new(),
+        last_activity_at: String::new(),
+        cwd: String::new(),
+        git_branch: None,
+        title: String::new(),
+        latest_user_message: None,
+        latest_assistant_message: None,
+        source_path: String::new(),
+        parent_thread_id: Some("parent".to_string()),
+        thread_source: Some("subagent".to_string()),
+        agent_nickname: Some(format!("Agent {index}")),
+        agent_role: Some("default".to_string()),
+        agent_path,
+        child_session_count: 0,
+    }
+}
+
+fn agent_summaries(count: usize) -> Vec<SessionSummary> {
+    (1..=count)
+        .map(|index| agent_summary(index, Some(format!("/root/task_{index}"))))
+        .collect()
 }
 
 #[test]
@@ -204,6 +230,29 @@ fn state_toggles_expansion_for_selected_session() {
 }
 
 #[test]
+fn agent_activity_expansion_is_independent_and_resets_on_selection_change() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = indexed_database(&temp);
+    let mut state = TuiState::load(&database, 20).unwrap();
+
+    assert!(!state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+    state.toggle_selected_expansion();
+    state.toggle_selected_agent_activity();
+    assert!(state.is_summary_expanded(state.selected_summary().unwrap()));
+    assert!(state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+
+    state.toggle_selected_agent_activity();
+    assert!(state.is_summary_expanded(state.selected_summary().unwrap()));
+    assert!(!state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+
+    state.toggle_selected_agent_activity();
+    state.move_up();
+    assert!(state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+    state.move_down();
+    assert!(!state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+}
+
+#[test]
 fn reload_clears_stale_expanded_session() {
     let temp = tempfile::tempdir().unwrap();
     let database = indexed_database(&temp);
@@ -291,9 +340,42 @@ fn agent_activity_uses_agent_path_and_omits_children_without_one() {
         .unwrap()
         .unwrap();
 
-    let lines = agent_activity_text_lines(&parent.child_sessions);
+    let lines = agent_activity_text_lines(&parent.child_sessions, false);
 
     assert_eq!(lines, vec!["Reviewer · default: review_implementation"]);
+}
+
+#[test]
+fn agent_activity_shows_exactly_five_agents_without_a_toggle_hint() {
+    let lines = agent_activity_text_lines(&agent_summaries(5), false);
+
+    assert_eq!(lines.len(), 5);
+    assert_eq!(lines[4], "Agent 5 · default: task_5");
+}
+
+#[test]
+fn collapsed_agent_activity_shows_five_agents_and_the_valid_hidden_count() {
+    let mut children = agent_summaries(7);
+    children.insert(0, agent_summary(0, None));
+
+    let lines = agent_activity_text_lines(&children, false);
+
+    assert_eq!(lines.len(), 6);
+    assert_eq!(lines[0], "Agent 1 · default: task_1");
+    assert_eq!(lines[4], "Agent 5 · default: task_5");
+    assert_eq!(lines[5], "… 2 more agents — Alt+G to show all");
+}
+
+#[test]
+fn expanded_agent_activity_shows_every_valid_agent_and_collapse_hint() {
+    let mut children = agent_summaries(7);
+    children.insert(0, agent_summary(0, None));
+
+    let lines = agent_activity_text_lines(&children, true);
+
+    assert_eq!(lines.len(), 8);
+    assert_eq!(lines[6], "Agent 7 · default: task_7");
+    assert_eq!(lines[7], "Alt+G to show fewer");
 }
 
 #[test]

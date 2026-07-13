@@ -77,6 +77,10 @@ pub(super) fn handle_key(
             state.toggle_selected_expansion();
             Ok(TuiAction::Continue)
         }
+        KeyCode::Char('g') if key_event.modifiers == KeyModifiers::ALT => {
+            state.toggle_selected_agent_activity();
+            Ok(TuiAction::Continue)
+        }
         KeyCode::Char('d') if key_event.modifiers == KeyModifiers::ALT => {
             state.scroll_preview_down();
             Ok(TuiAction::Continue)
@@ -182,6 +186,45 @@ mod tests {
             state.expanded_session_id(),
             Some(parsed.session_id.as_str())
         );
+    }
+
+    #[test]
+    fn alt_g_toggles_agent_activity_without_expanding_the_row() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut parsed = crate::codex::parse_session_file(std::path::Path::new(
+            "tests/fixtures/session-a.jsonl",
+        ))
+        .unwrap();
+        parsed.source_path = temp.path().join("session-a.jsonl");
+        database.upsert_session(&parsed).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        let action = press_character(&database, &mut state, 'g', KeyModifiers::ALT);
+
+        assert!(matches!(action, TuiAction::Continue));
+        assert!(state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+        assert_eq!(state.expanded_session_id(), None);
+    }
+
+    #[test]
+    fn modified_and_plain_g_do_not_trigger_agent_activity_expansion() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut parsed = crate::codex::parse_session_file(std::path::Path::new(
+            "tests/fixtures/session-a.jsonl",
+        ))
+        .unwrap();
+        parsed.source_path = temp.path().join("session-a.jsonl");
+        database.upsert_session(&parsed).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+
+        press_character(&database, &mut state, 'g', KeyModifiers::CONTROL);
+        assert!(!state.is_agent_activity_expanded(state.selected_summary().unwrap()));
+        assert_eq!(state.query(), "");
+
+        press_character(&database, &mut state, 'g', KeyModifiers::NONE);
+        assert_eq!(state.query(), "g");
     }
 
     #[test]

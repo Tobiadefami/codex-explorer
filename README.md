@@ -63,6 +63,7 @@ TUI keys:
 - `Alt+P` returns to the current directory
 - `Alt+R` refreshes the index
 - `Alt+E` expands or collapses the selected row
+- `Alt+G` shows all or five agents in Agent Activity
 - `Alt+I` runs or refreshes an audit for the selected session
 - `Tab` shows the next preview
 - `Shift+Tab` shows the previous preview

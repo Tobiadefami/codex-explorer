@@ -52,6 +52,7 @@ pub struct TuiState {
     preview_scroll: usize,
     preview_mode: PreviewMode,
     expanded_session_id: Option<String>,
+    expanded_agent_activity_session_id: Option<String>,
 }
 
 impl TuiState {
@@ -70,6 +71,7 @@ impl TuiState {
             preview_scroll: 0,
             preview_mode: PreviewMode::Overview,
             expanded_session_id: None,
+            expanded_agent_activity_session_id: None,
         })
     }
 
@@ -95,6 +97,7 @@ impl TuiState {
             preview_scroll: 0,
             preview_mode: PreviewMode::Overview,
             expanded_session_id: None,
+            expanded_agent_activity_session_id: None,
         })
     }
 
@@ -159,6 +162,23 @@ impl TuiState {
         self.expanded_session_id() == Some(summary.session_id.as_str())
     }
 
+    pub fn toggle_selected_agent_activity(&mut self) {
+        let Some(session_id) = self.selected_session_id().map(ToOwned::to_owned) else {
+            self.expanded_agent_activity_session_id = None;
+            return;
+        };
+
+        if self.expanded_agent_activity_session_id.as_deref() == Some(session_id.as_str()) {
+            self.expanded_agent_activity_session_id = None;
+        } else {
+            self.expanded_agent_activity_session_id = Some(session_id);
+        }
+    }
+
+    pub fn is_agent_activity_expanded(&self, summary: &SessionSummary) -> bool {
+        self.expanded_agent_activity_session_id.as_deref() == Some(summary.session_id.as_str())
+    }
+
     pub fn set_preview_mode(&mut self, preview_mode: PreviewMode) {
         self.preview_mode = preview_mode;
         self.preview_scroll = 0;
@@ -181,6 +201,7 @@ impl TuiState {
         self.summaries = self.load_summaries(database)?;
         self.selected_index = first_index(&self.summaries);
         self.preview_scroll = 0;
+        self.expanded_agent_activity_session_id = None;
         self.clear_stale_expansion();
         Ok(())
     }
@@ -237,7 +258,11 @@ impl TuiState {
             return;
         };
         let last_index = self.summaries.len().saturating_sub(1);
-        self.selected_index = Some((selected_index + 1).min(last_index));
+        let next_index = (selected_index + 1).min(last_index);
+        if next_index != selected_index {
+            self.expanded_agent_activity_session_id = None;
+        }
+        self.selected_index = Some(next_index);
         self.preview_scroll = 0;
     }
 
@@ -245,7 +270,11 @@ impl TuiState {
         let Some(selected_index) = self.selected_index else {
             return;
         };
-        self.selected_index = Some(selected_index.saturating_sub(1));
+        let previous_index = selected_index.saturating_sub(1);
+        if previous_index != selected_index {
+            self.expanded_agent_activity_session_id = None;
+        }
+        self.selected_index = Some(previous_index);
         self.preview_scroll = 0;
     }
 
