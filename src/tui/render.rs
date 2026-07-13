@@ -196,7 +196,13 @@ fn render_preview(
     audit_status: &AuditRunStatus,
 ) {
     let lines = match preview {
-        Some(detail) => preview_lines(state.preview_mode(), detail, audit, audit_status),
+        Some(detail) => preview_lines(
+            state.preview_mode(),
+            detail,
+            state.is_agent_activity_expanded(&detail.summary),
+            audit,
+            audit_status,
+        ),
         None => vec![Line::from(Span::styled(
             empty_state_message(state.query(), refresh_status),
             secondary_style(),
@@ -216,7 +222,7 @@ fn render_preview(
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type search | Alt+I audit | Alt+E expand | Alt+R reindex | Tab/Shift+Tab previews | Alt+A all | Alt+P project | Enter resume | Esc quit",
+        "Type search | Alt+I audit | Alt+E row | Alt+G agents | Alt+R reindex | Tab/Shift+Tab previews | Alt+A all | Alt+P project | Enter resume | Esc quit",
     )
     .style(secondary_style());
     frame.render_widget(help, area);
@@ -229,11 +235,12 @@ fn scope_note_label(state: &TuiState) -> String {
 fn preview_lines(
     preview_mode: PreviewMode,
     detail: &SessionDetail,
+    agent_activity_expanded: bool,
     audit: Option<&SessionAuditRecord>,
     audit_status: &AuditRunStatus,
 ) -> Vec<Line<'static>> {
     match preview_mode {
-        PreviewMode::Overview => overview_lines(detail),
+        PreviewMode::Overview => overview_lines(detail, agent_activity_expanded),
         PreviewMode::Conversation => conversation_lines(detail),
         PreviewMode::Tools => tool_lines(detail),
         PreviewMode::Timeline => timeline_lines(detail),
@@ -295,7 +302,7 @@ fn audit_lines(
     lines
 }
 
-fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
+fn overview_lines(detail: &SessionDetail, agent_activity_expanded: bool) -> Vec<Line<'static>> {
     let mut lines = vec![
         section_label("Started With"),
         Line::from(Span::styled(
@@ -311,7 +318,7 @@ fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
         section_label("Last Assistant Response"),
         message_or_empty(latest_assistant_message(detail)),
     ];
-    append_agent_activity(&mut lines, detail);
+    append_agent_activity(&mut lines, detail, agent_activity_expanded);
     lines.push(Line::from(""));
     lines.push(section_label("Session Details"));
     append_overview_detail_rows(&mut lines, detail);
@@ -320,8 +327,12 @@ fn overview_lines(detail: &SessionDetail) -> Vec<Line<'static>> {
     lines
 }
 
-fn append_agent_activity(lines: &mut Vec<Line<'static>>, detail: &SessionDetail) {
-    let activity_lines = agent_activity_text_lines(&detail.child_sessions, false);
+fn append_agent_activity(
+    lines: &mut Vec<Line<'static>>,
+    detail: &SessionDetail,
+    agent_activity_expanded: bool,
+) {
+    let activity_lines = agent_activity_text_lines(&detail.child_sessions, agent_activity_expanded);
     if activity_lines.is_empty() {
         return;
     }
