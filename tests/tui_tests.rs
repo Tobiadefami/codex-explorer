@@ -265,7 +265,7 @@ fn expanded_parent_summary_includes_agent_count() {
 }
 
 #[test]
-fn agent_activity_lines_identify_child_task_and_role() {
+fn agent_activity_uses_agent_path_and_omits_children_without_one() {
     let temp = tempfile::tempdir().unwrap();
     let sessions_dir = temp.path().join("sessions");
     std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -279,6 +279,11 @@ fn agent_activity_lines_identify_child_task_and_role() {
         sessions_dir.join("session-subagent.jsonl"),
     )
     .unwrap();
+    std::fs::copy(
+        "tests/fixtures/session-subagent-missing-path.jsonl",
+        sessions_dir.join("session-subagent-missing-path.jsonl"),
+    )
+    .unwrap();
     let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
     indexer::reindex(&database, &sessions_dir).unwrap();
     let parent = database
@@ -288,7 +293,7 @@ fn agent_activity_lines_identify_child_task_and_role() {
 
     let lines = agent_activity_text_lines(&parent.child_sessions);
 
-    assert_eq!(lines, vec!["Reviewer · default: review the implementation"]);
+    assert_eq!(lines, vec!["Reviewer · default: review_implementation"]);
 }
 
 #[test]
@@ -336,7 +341,7 @@ fn display_helpers_create_compact_session_metadata() {
 }
 
 #[test]
-fn preview_messages_skip_bootstrap_context_and_limit_results() {
+fn preview_messages_skip_contextual_user_messages_and_limit_results() {
     let messages = vec![
         codex::ParsedMessage {
             timestamp: "2026-07-01T10:00:00Z".to_string(),
@@ -347,10 +352,16 @@ fn preview_messages_skip_bootstrap_context_and_limit_results() {
         codex::ParsedMessage {
             timestamp: "2026-07-01T10:00:01Z".to_string(),
             role: "user".to_string(),
-            text: "build a better session browser".to_string(),
+            text: "<recommended_plugins>\n- Example (example@plugin)\n</recommended_plugins>"
+                .to_string(),
         },
         codex::ParsedMessage {
             timestamp: "2026-07-01T10:00:02Z".to_string(),
+            role: "user".to_string(),
+            text: "build a better session browser".to_string(),
+        },
+        codex::ParsedMessage {
+            timestamp: "2026-07-01T10:00:03Z".to_string(),
             role: "assistant".to_string(),
             text: "I will improve the TUI layout.".to_string(),
         },

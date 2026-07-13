@@ -23,6 +23,7 @@ pub struct SessionSummary {
     pub thread_source: Option<String>,
     pub agent_nickname: Option<String>,
     pub agent_role: Option<String>,
+    pub agent_path: Option<String>,
     pub child_session_count: usize,
 }
 
@@ -77,6 +78,7 @@ impl Database {
                 thread_source TEXT,
                 agent_nickname TEXT,
                 agent_role TEXT,
+                agent_path TEXT,
                 searchable_text TEXT NOT NULL
             );
 
@@ -148,6 +150,7 @@ impl Database {
         self.add_column_if_missing("sessions", "thread_source", "TEXT")?;
         self.add_column_if_missing("sessions", "agent_nickname", "TEXT")?;
         self.add_column_if_missing("sessions", "agent_role", "TEXT")?;
+        self.add_column_if_missing("sessions", "agent_path", "TEXT")?;
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS sessions_parent_thread_id_idx ON sessions(parent_thread_id)",
             [],
@@ -226,9 +229,9 @@ impl Database {
                 session_id, started_at, cwd, cli_version, model_provider,
                 source_path, modified_unix_seconds, title, last_activity_at,
                 latest_user_message, latest_assistant_message, git_branch, thread_source,
-                parent_thread_id, agent_nickname, agent_role, searchable_text
+                parent_thread_id, agent_nickname, agent_role, agent_path, searchable_text
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             ON CONFLICT(session_id) DO UPDATE SET
                 started_at = excluded.started_at,
                 cwd = excluded.cwd,
@@ -245,6 +248,7 @@ impl Database {
                 parent_thread_id = excluded.parent_thread_id,
                 agent_nickname = excluded.agent_nickname,
                 agent_role = excluded.agent_role,
+                agent_path = excluded.agent_path,
                 searchable_text = excluded.searchable_text
             "#,
             params![
@@ -264,6 +268,7 @@ impl Database {
                 session.parent_thread_id,
                 session.agent_nickname,
                 session.agent_role,
+                session.agent_path,
                 session.searchable_text,
             ],
         )?;
@@ -346,7 +351,7 @@ impl Database {
             r#"
             SELECT session_id, started_at, last_activity_at, cwd, title,
                    latest_user_message, latest_assistant_message, git_branch, source_path,
-                   parent_thread_id, thread_source, agent_nickname, agent_role,
+                   parent_thread_id, thread_source, agent_nickname, agent_role, agent_path,
                    (SELECT COUNT(*) FROM sessions child
                     WHERE child.parent_thread_id = sessions.session_id)
             FROM sessions
@@ -364,7 +369,7 @@ impl Database {
             r#"
             SELECT session_id, started_at, last_activity_at, cwd, title,
                    latest_user_message, latest_assistant_message, git_branch, source_path,
-                   parent_thread_id, thread_source, agent_nickname, agent_role,
+                   parent_thread_id, thread_source, agent_nickname, agent_role, agent_path,
                    (SELECT COUNT(*) FROM sessions child
                     WHERE child.parent_thread_id = sessions.session_id)
             FROM sessions
@@ -386,7 +391,7 @@ impl Database {
             r#"
             SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
                    s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path,
-                   s.parent_thread_id, s.thread_source, s.agent_nickname, s.agent_role,
+                   s.parent_thread_id, s.thread_source, s.agent_nickname, s.agent_role, s.agent_path,
                    (SELECT COUNT(*) FROM sessions child
                     WHERE child.parent_thread_id = s.session_id)
             FROM session_fts f
@@ -415,7 +420,7 @@ impl Database {
             r#"
             SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
                    s.latest_user_message, s.latest_assistant_message, s.git_branch, s.source_path,
-                   s.parent_thread_id, s.thread_source, s.agent_nickname, s.agent_role,
+                   s.parent_thread_id, s.thread_source, s.agent_nickname, s.agent_role, s.agent_path,
                    (SELECT COUNT(*) FROM sessions child
                     WHERE child.parent_thread_id = s.session_id)
             FROM session_fts f
@@ -437,7 +442,7 @@ impl Database {
                 r#"
                 SELECT session_id, started_at, last_activity_at, cwd, title,
                        latest_user_message, latest_assistant_message, git_branch, source_path,
-                       parent_thread_id, thread_source, agent_nickname, agent_role,
+                       parent_thread_id, thread_source, agent_nickname, agent_role, agent_path,
                        (SELECT COUNT(*) FROM sessions child
                         WHERE child.parent_thread_id = sessions.session_id)
                 FROM sessions
@@ -461,7 +466,7 @@ impl Database {
                 SELECT s.session_id, s.started_at, s.last_activity_at, s.cwd, s.title,
                        s.latest_user_message, s.latest_assistant_message, s.git_branch,
                        s.source_path, s.parent_thread_id, s.thread_source,
-                       s.agent_nickname, s.agent_role,
+                       s.agent_nickname, s.agent_role, s.agent_path,
                        (SELECT COUNT(*) FROM sessions child
                         WHERE child.parent_thread_id = s.session_id)
                 FROM sessions s
@@ -707,7 +712,8 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary>
         thread_source: row.get(10)?,
         agent_nickname: row.get(11)?,
         agent_role: row.get(12)?,
-        child_session_count: row.get::<_, i64>(13)? as usize,
+        agent_path: row.get(13)?,
+        child_session_count: row.get::<_, i64>(14)? as usize,
     })
 }
 

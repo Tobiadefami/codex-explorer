@@ -20,6 +20,7 @@ pub struct ParsedSession {
     pub thread_source: Option<String>,
     pub agent_nickname: Option<String>,
     pub agent_role: Option<String>,
+    pub agent_path: Option<String>,
     pub source_path: PathBuf,
     pub modified_unix_seconds: i64,
     pub title: String,
@@ -70,6 +71,7 @@ pub struct ParsedSessionMeta {
     pub thread_source: Option<String>,
     pub agent_nickname: Option<String>,
     pub agent_role: Option<String>,
+    pub agent_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +142,7 @@ fn derive_session_from_items(
     let mut thread_source = None;
     let mut agent_nickname = None;
     let mut agent_role = None;
+    let mut agent_path = None;
     let mut messages = Vec::new();
     let mut tool_events = Vec::new();
     let mut last_activity_at = String::new();
@@ -159,6 +162,7 @@ fn derive_session_from_items(
                 thread_source = meta.thread_source.clone();
                 agent_nickname = meta.agent_nickname.clone();
                 agent_role = meta.agent_role.clone();
+                agent_path = meta.agent_path.clone();
             }
             ParsedSessionItemKind::ToolEvent(tool_event) => {
                 update_last_activity(&mut last_activity_at, &tool_event.timestamp);
@@ -216,6 +220,7 @@ fn derive_session_from_items(
         thread_source,
         agent_nickname,
         agent_role,
+        agent_path,
         source_path: path.to_path_buf(),
         modified_unix_seconds,
         title,
@@ -269,21 +274,10 @@ fn parse_session_meta(timestamp: &str, payload: &Value) -> ParsedSessionMeta {
             .and_then(|git| string_field(git, "branch")),
         parent_thread_id: string_field(payload, "parent_thread_id"),
         thread_source: string_field(payload, "thread_source"),
-        agent_nickname: string_field(payload, "agent_nickname")
-            .or_else(|| nested_spawn_string(payload, "agent_nickname")),
-        agent_role: string_field(payload, "agent_role")
-            .or_else(|| nested_spawn_string(payload, "agent_role")),
+        agent_nickname: string_field(payload, "agent_nickname"),
+        agent_role: string_field(payload, "agent_role"),
+        agent_path: string_field(payload, "agent_path"),
     }
-}
-
-fn nested_spawn_string(payload: &Value, field: &str) -> Option<String> {
-    payload
-        .get("source")?
-        .get("subagent")?
-        .get("thread_spawn")?
-        .get(field)?
-        .as_str()
-        .map(ToOwned::to_owned)
 }
 
 fn unknown_session_item(record_type: String, payload: Value) -> ParsedSessionItemKind {
@@ -594,7 +588,7 @@ fn title_from_message(message: &ParsedMessage) -> Option<String> {
     }
 
     let text = message.text.trim_start();
-    if text.is_empty() || is_bootstrap_message(text) {
+    if text.is_empty() || is_contextual_user_message(text) {
         return None;
     }
 
@@ -614,7 +608,7 @@ fn preview_message_text(text: &str) -> String {
 
 fn searchable_text_from_message(message: &ParsedMessage) -> Option<String> {
     let text = message.text.trim_start();
-    if text.is_empty() || is_bootstrap_message(text) {
+    if text.is_empty() || is_contextual_user_message(text) {
         return None;
     }
 
@@ -661,23 +655,26 @@ fn searchable_text_from_tool_event(event: &ParsedToolEvent) -> Option<String> {
 
 fn is_meaningful_text(text: &str) -> bool {
     let text = text.trim_start();
-    !text.is_empty() && !is_bootstrap_message(text)
+    !text.is_empty() && !is_contextual_user_message(text)
 }
 
-fn is_bootstrap_message(text: &str) -> bool {
-    const PREFIXES: &[&str] = &[
+pub(crate) fn is_contextual_user_message(text: &str) -> bool {
+    const CONTEXTUAL_USER_MESSAGE_PREFIXES: &[&str] = &[
         "<environment_context",
-        "<permissions instructions>",
-        "<apps_instructions>",
         "<skills_instructions>",
-        "<plugins_instructions>",
-        "<collaboration_mode>",
+        "<external_",
+        "<user_shell_command>",
+        "<turn_aborted>",
+        "<subagent_notification>",
+        "<codex_internal_context",
+        "<recommended_plugins>",
+        "<hook_prompt",
         "# AGENTS.md instructions",
-        "# CLAUDE.md instructions",
-        "# GEMINI.md instructions",
     ];
 
-    PREFIXES.iter().any(|prefix| text.starts_with(prefix))
+    CONTEXTUAL_USER_MESSAGE_PREFIXES
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
 }
 
 fn is_noise_line(line: &str) -> bool {
