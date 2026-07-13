@@ -12,9 +12,34 @@ mod db;
 #[path = "../src/indexer.rs"]
 mod indexer;
 
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use codex::ParsedSessionItemKind;
+
+#[test]
+fn reads_committed_sessions_while_an_exclusive_write_is_open() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("index.sqlite");
+    let database = db::Database::open(&db_path).unwrap();
+    let parsed = codex::parse_session_file(Path::new("tests/fixtures/session-a.jsonl")).unwrap();
+    database.upsert_session(&parsed).unwrap();
+
+    let writer = rusqlite::Connection::open(&db_path).unwrap();
+    writer.busy_timeout(Duration::ZERO).unwrap();
+    writer
+        .execute_batch(
+            "BEGIN EXCLUSIVE;
+             UPDATE sessions SET title = 'uncommitted title' WHERE session_id =
+                 '11111111-1111-4111-8111-111111111111';",
+        )
+        .unwrap();
+
+    let sessions = database.list_sessions(10).unwrap();
+
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].title, "add turnstile to the signup form");
+    writer.execute_batch("ROLLBACK;").unwrap();
+}
 
 #[test]
 fn stores_lists_searches_and_shows_sessions() {
