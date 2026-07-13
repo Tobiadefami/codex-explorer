@@ -19,6 +19,28 @@ pub enum PreviewMode {
     Audit,
 }
 
+impl PreviewMode {
+    fn next(self) -> Self {
+        match self {
+            Self::Overview => Self::Conversation,
+            Self::Conversation => Self::Tools,
+            Self::Tools => Self::Timeline,
+            Self::Timeline => Self::Audit,
+            Self::Audit => Self::Overview,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::Overview => Self::Audit,
+            Self::Conversation => Self::Overview,
+            Self::Tools => Self::Conversation,
+            Self::Timeline => Self::Tools,
+            Self::Audit => Self::Timeline,
+        }
+    }
+}
+
 pub struct TuiState {
     query: String,
     summaries: Vec<SessionSummary>,
@@ -140,6 +162,14 @@ impl TuiState {
     pub fn set_preview_mode(&mut self, preview_mode: PreviewMode) {
         self.preview_mode = preview_mode;
         self.preview_scroll = 0;
+    }
+
+    pub fn select_next_preview(&mut self) {
+        self.set_preview_mode(self.preview_mode.next());
+    }
+
+    pub fn select_previous_preview(&mut self) {
+        self.set_preview_mode(self.preview_mode.previous());
     }
 
     pub fn set_query(&mut self, database: &Database, query: String) -> Result<()> {

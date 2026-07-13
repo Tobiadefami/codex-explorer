@@ -216,7 +216,7 @@ fn render_preview(
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help = Paragraph::new(
-        "Type search | Alt+I audit | Alt+E expand | Alt+R reindex | Alt+1-5 previews | Alt+A all | Alt+P project | Enter resume | Esc quit",
+        "Type search | Alt+I audit | Alt+E expand | Alt+R reindex | Tab/Shift+Tab previews | Alt+A all | Alt+P project | Enter resume | Esc quit",
     )
     .style(secondary_style());
     frame.render_widget(help, area);
