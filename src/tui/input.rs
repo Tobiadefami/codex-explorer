@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::db::Database;
 
-use super::state::{PreviewMode, TuiState};
+use super::state::TuiState;
 
 pub(super) enum TuiAction {
     Continue,
@@ -44,6 +44,14 @@ pub(super) fn handle_key(
             state.scroll_preview_top();
             Ok(TuiAction::Continue)
         }
+        KeyCode::Tab if key_event.modifiers == KeyModifiers::NONE => {
+            state.select_next_preview();
+            Ok(TuiAction::Continue)
+        }
+        KeyCode::BackTab if key_event.modifiers == KeyModifiers::SHIFT => {
+            state.select_previous_preview();
+            Ok(TuiAction::Continue)
+        }
         KeyCode::Backspace => {
             let mut query = state.query().to_string();
             query.pop();
@@ -67,26 +75,6 @@ pub(super) fn handle_key(
             .unwrap_or(TuiAction::Continue)),
         KeyCode::Char('e') if key_event.modifiers == KeyModifiers::ALT => {
             state.toggle_selected_expansion();
-            Ok(TuiAction::Continue)
-        }
-        KeyCode::Char('1') if key_event.modifiers == KeyModifiers::ALT => {
-            state.set_preview_mode(PreviewMode::Overview);
-            Ok(TuiAction::Continue)
-        }
-        KeyCode::Char('2') if key_event.modifiers == KeyModifiers::ALT => {
-            state.set_preview_mode(PreviewMode::Conversation);
-            Ok(TuiAction::Continue)
-        }
-        KeyCode::Char('3') if key_event.modifiers == KeyModifiers::ALT => {
-            state.set_preview_mode(PreviewMode::Tools);
-            Ok(TuiAction::Continue)
-        }
-        KeyCode::Char('4') if key_event.modifiers == KeyModifiers::ALT => {
-            state.set_preview_mode(PreviewMode::Timeline);
-            Ok(TuiAction::Continue)
-        }
-        KeyCode::Char('5') if key_event.modifiers == KeyModifiers::ALT => {
-            state.set_preview_mode(PreviewMode::Audit);
             Ok(TuiAction::Continue)
         }
         KeyCode::Char('d') if key_event.modifiers == KeyModifiers::ALT => {
@@ -118,7 +106,7 @@ pub(super) fn handle_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::state::ProjectScope;
+    use crate::tui::state::{PreviewMode, ProjectScope};
 
     fn press_character(
         database: &Database,
@@ -233,23 +221,58 @@ mod tests {
     }
 
     #[test]
-    fn alt_number_keys_switch_every_preview_mode() {
+    fn tab_cycles_forward_through_preview_modes_and_resets_scroll() {
         let temp = tempfile::tempdir().unwrap();
         let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
         let mut state = TuiState::load(&database, 20).unwrap();
-        let preview_modes = [
-            ('1', PreviewMode::Overview),
-            ('2', PreviewMode::Conversation),
-            ('3', PreviewMode::Tools),
-            ('4', PreviewMode::Timeline),
-            ('5', PreviewMode::Audit),
+        let expected_modes = [
+            PreviewMode::Conversation,
+            PreviewMode::Tools,
+            PreviewMode::Timeline,
+            PreviewMode::Audit,
+            PreviewMode::Overview,
         ];
 
-        for (key, expected_mode) in preview_modes {
-            let action = press_character(&database, &mut state, key, KeyModifiers::ALT);
+        for expected_mode in expected_modes {
+            state.scroll_preview_down();
+            let action = handle_key(
+                &database,
+                &mut state,
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            )
+            .unwrap();
 
             assert!(matches!(action, TuiAction::Continue));
             assert_eq!(state.preview_mode(), expected_mode);
+            assert_eq!(state.preview_scroll(), 0);
+        }
+    }
+
+    #[test]
+    fn backtab_cycles_backward_through_preview_modes_and_resets_scroll() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::open(&temp.path().join("index.sqlite")).unwrap();
+        let mut state = TuiState::load(&database, 20).unwrap();
+        let expected_modes = [
+            PreviewMode::Audit,
+            PreviewMode::Timeline,
+            PreviewMode::Tools,
+            PreviewMode::Conversation,
+            PreviewMode::Overview,
+        ];
+
+        for expected_mode in expected_modes {
+            state.scroll_preview_down();
+            let action = handle_key(
+                &database,
+                &mut state,
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            )
+            .unwrap();
+
+            assert!(matches!(action, TuiAction::Continue));
+            assert_eq!(state.preview_mode(), expected_mode);
+            assert_eq!(state.preview_scroll(), 0);
         }
     }
 
