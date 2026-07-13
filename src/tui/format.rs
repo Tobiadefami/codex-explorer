@@ -1,7 +1,7 @@
 use std::{collections::HashSet, path::Path};
 
 use crate::{
-    codex::{ParsedMessage, ParsedToolEvent},
+    codex::{is_contextual_user_message, ParsedMessage, ParsedToolEvent},
     db::SessionSummary,
 };
 
@@ -99,8 +99,16 @@ pub fn session_overview_detail_rows(summary: &SessionSummary) -> Vec<OverviewDet
 pub fn agent_activity_text_lines(children: &[SessionSummary]) -> Vec<String> {
     children
         .iter()
+        .filter_map(|child| {
+            let task_name = child
+                .agent_path
+                .as_deref()?
+                .rsplit('/')
+                .find(|component| !component.is_empty())?;
+            Some((child, task_name))
+        })
         .enumerate()
-        .map(|(index, child)| {
+        .map(|(index, (child, task_name))| {
             let name = child
                 .agent_nickname
                 .clone()
@@ -109,7 +117,7 @@ pub fn agent_activity_text_lines(children: &[SessionSummary]) -> Vec<String> {
                 Some(role) if !role.trim().is_empty() => format!("{name} · {role}"),
                 _ => name,
             };
-            format!("{identity}: {}", preview_text(&child.title))
+            format!("{identity}: {}", preview_text(task_name))
         })
         .collect()
 }
@@ -272,25 +280,7 @@ pub(super) fn trim_to_chars(text: &str, max_chars: usize) -> String {
 
 fn is_meaningful_message(text: &str) -> bool {
     let text = text.trim_start();
-    if text.is_empty() {
-        return false;
-    }
-
-    const BOOTSTRAP_PREFIXES: &[&str] = &[
-        "<environment_context",
-        "<permissions instructions>",
-        "<apps_instructions>",
-        "<skills_instructions>",
-        "<plugins_instructions>",
-        "<collaboration_mode>",
-        "# AGENTS.md instructions",
-        "# CLAUDE.md instructions",
-        "# GEMINI.md instructions",
-    ];
-
-    !BOOTSTRAP_PREFIXES
-        .iter()
-        .any(|prefix| text.starts_with(prefix))
+    !text.is_empty() && !is_contextual_user_message(text)
 }
 
 fn is_failure(event: &ParsedToolEvent) -> bool {

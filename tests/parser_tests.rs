@@ -148,6 +148,20 @@ fn parses_thread_source_for_subagent_sessions() {
     assert_eq!(parsed.thread_source.as_deref(), Some("subagent"));
     assert_eq!(parsed.agent_nickname.as_deref(), Some("Reviewer"));
     assert_eq!(parsed.agent_role.as_deref(), Some("default"));
+    assert_eq!(
+        parsed.agent_path.as_deref(),
+        Some("/root/review_implementation")
+    );
+}
+
+#[test]
+fn recommended_plugins_context_does_not_become_session_content() {
+    let parsed =
+        codex::parse_session_file(Path::new("tests/fixtures/session-subagent.jsonl")).unwrap();
+
+    assert_eq!(parsed.title, parsed.session_id);
+    assert_eq!(parsed.latest_user_message, None);
+    assert!(!parsed.searchable_text.contains("<recommended_plugins>"));
 }
 
 #[test]
