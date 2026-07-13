@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -40,6 +40,8 @@ pub struct Database {
     conn: Connection,
 }
 
+const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -49,6 +51,17 @@ impl Database {
 
         let conn =
             Connection::open(path).with_context(|| format!("open database {}", path.display()))?;
+        conn.busy_timeout(DATABASE_BUSY_TIMEOUT)
+            .context("configure database busy timeout")?;
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            "#,
+        )
+        .context("configure database connection")?;
+
         let database = Self { conn };
         database.migrate()?;
         Ok(database)
@@ -57,8 +70,6 @@ impl Database {
     fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
-            PRAGMA foreign_keys = ON;
-
             DROP TABLE IF EXISTS skill_evidence;
 
             CREATE TABLE IF NOT EXISTS sessions (
